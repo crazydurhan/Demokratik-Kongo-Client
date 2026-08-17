@@ -1,0 +1,27 @@
+# Build output
+/build/
+**/build/etc/
+**/build/*.exe
+**/build/*.dll
+**/build/*.pdb
+**/build/*.lib
+**/build/*.exp
+/release/
+
+# Local machine / IDE state
+local.props
+.vs/
+*.user
+*.suo
+
+# Decompiler / extraction / AI-tool artifacts
+/bin/
+/.jarc/
+/.freebuff/
+/_extracted.jar
+/asm-merge/
+/asm-*.jar
+*.log
+__pycache__/
+.aider.chat.history.md
+.aider.input.history
