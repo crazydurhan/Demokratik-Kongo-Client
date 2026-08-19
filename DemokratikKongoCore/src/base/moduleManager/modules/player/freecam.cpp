@@ -17,7 +17,7 @@ Freecam::Freecam()
     : Module("Freecam", "Detach camera and fly freely; body stays in place.", Category::Utility)
 {
     m_speed = &add<NumberSetting>("Speed", 2.5f, 0.5f, 10.0f, 0.5f);
-    m_disableOnDamage = &add<BoolSetting>("Disable On Damage", true);
+    m_disableOnDamage = &add<BoolSetting>("Disable On Damage", false);
     m_allowDig = &add<BoolSetting>("Allow Digging", false);
     m_allowPlace = &add<BoolSetting>("Allow Placing", false);
     m_allowInteract = &add<BoolSetting>("Allow Interacting", false);
