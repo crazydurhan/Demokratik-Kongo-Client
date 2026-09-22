@@ -1708,6 +1708,11 @@ void Gui::Render()
             g.shell = Shell_Settings;
             g.search[0] = '\0';
         }
+        ImGui::SameLine(0.0f, 8.0f);
+        if (PillButton("##openDropdown", "Dropdown", ImVec2(108.0f, 36.0f), true))
+            Prefs().menuLayout = 1;
+        if (ImGui::IsItemHovered())
+            SetTooltip("Open the dropdown columns");
         ImGui::EndGroup();
 
         ImGui::SetCursorScreenPos(ImVec2(winMax.x - 56.0f, winMin.y + 16.0f));
@@ -1715,15 +1720,9 @@ void Gui::Render()
             Menu::Open = false;
 
         const float contentX = winMin.x + sidebarW;
-        const float searchMaxW = std::max(140.0f, std::min(280.0f, ws.x - sidebarW - 460.0f));
-        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 112.0f - searchMaxW, winMin.y + 16.0f));
+        const float searchMaxW = std::max(140.0f, std::min(280.0f, ws.x - sidebarW - 420.0f));
+        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 72.0f - searchMaxW, winMin.y + 16.0f));
         SearchField("##search", g.search, sizeof(g.search), searchMaxW, 32.0f);
-
-        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 96.0f, winMin.y + 16.0f));
-        if (IconButton("##dropdownLayout", Icon::List, 32.0f, false))
-            Prefs().menuLayout = 1;
-        if (ImGui::IsItemHovered())
-            SetTooltip("Dropdown columns");
 
         // ------------------------------------------- left category rail (Home)
         if (showSidebar)

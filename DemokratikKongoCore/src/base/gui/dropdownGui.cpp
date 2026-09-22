@@ -49,6 +49,15 @@ namespace Gui
         constexpr float kColGap = 8.0f;
         constexpr float kRounding = 8.0f;
         constexpr float kSettingsW = 360.0f;
+        constexpr float kSearchW = 260.0f;
+        constexpr float kBarH = 34.0f;
+        constexpr float kClassicW = 92.0f;
+        constexpr float kBarGap = 8.0f;
+
+        float SearchBarWidth()
+        {
+            return kClassicW + kBarGap + kSearchW + kBarGap + kBarH;
+        }
 
         constexpr ImGuiWindowFlags kOverlayFlags =
             ImGuiWindowFlags_NoTitleBar |
@@ -431,9 +440,7 @@ namespace Gui
                 return;
 
             const ImVec2 screen = ImGui::GetIO().DisplaySize;
-            constexpr float kSearchW = 280.0f;
-            constexpr float kBarH = 34.0f;
-            const float barW = kSearchW + 8.0f + kBarH;
+            const float barW = SearchBarWidth();
             const float barX = (screen.x - barW) * 0.5f;
             ImVec2 pos(barX + barW - kSettingsW, 16.0f + kBarH + 8.0f);
             if (pos.x < 8.0f)
@@ -717,9 +724,7 @@ namespace Gui
         void DrawSearchBar(float opacity)
         {
             const ImVec2 screen = ImGui::GetIO().DisplaySize;
-            constexpr float kSearchW = 280.0f;
-            constexpr float kBarH = 34.0f;
-            const float barW = kSearchW + 8.0f + kBarH;
+            const float barW = SearchBarWidth();
             const ImVec2 pos((screen.x - barW) * 0.5f, 16.0f);
 
             ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
@@ -732,9 +737,15 @@ namespace Gui
             if (ImGui::Begin("##dropdownSearch", nullptr, kOverlayFlags))
             {
                 ImGui::SetCursorScreenPos(pos);
+                if (PillButton("##classicLayout", "Classic", ImVec2(kClassicW, kBarH), true))
+                    Prefs().menuLayout = 0;
+                if (ImGui::IsItemHovered())
+                    SetTooltip("Back to the classic window");
+
+                ImGui::SetCursorScreenPos(ImVec2(pos.x + kClassicW + kBarGap, pos.y));
                 SearchField("##dropdownFind", g_search, sizeof(g_search), kSearchW, kBarH);
 
-                ImGui::SetCursorScreenPos(ImVec2(pos.x + kSearchW + 8.0f, pos.y));
+                ImGui::SetCursorScreenPos(ImVec2(pos.x + kClassicW + kBarGap + kSearchW + kBarGap, pos.y));
                 if (IconButton("##gear", Icon::Gear, kBarH, g_gear))
                 {
                     g_gear = !g_gear;
