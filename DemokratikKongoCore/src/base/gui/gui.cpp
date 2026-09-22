@@ -1,5 +1,6 @@
 #include "gui.h"
 
+#include "dropdownGui.h"
 #include "guiCore.h"
 #include "guiWidgets.h"
 
@@ -820,6 +821,15 @@ namespace
 
         SectionLabel("INTERFACE");
 
+        {
+            static const char* kLayouts[] = { "Classic", "Dropdown" };
+            if (Prefs().menuLayout < 0 || Prefs().menuLayout > 1)
+                Prefs().menuLayout = 0;
+            RowDropdown("Menu layout",
+                        desc ? "Classic window, or category columns you can drag apart" : "",
+                        &Prefs().menuLayout, kLayouts, 2);
+        }
+
         RowToggle("Reduce motion", desc ? "Snap animations instead of easing them" : "",
                   &ReduceMotion());
         RowToggle("Show descriptions", desc ? "Display helper text under every option" : "",
@@ -1572,6 +1582,7 @@ void Gui::Shutdown()
 {
     ClearNotifications();
     ReleaseAnimationState();
+    ResetDropdown();
     g = GuiState{};
 }
 
@@ -1601,6 +1612,17 @@ void Gui::Render()
 
     const float opacity = SmoothStep(g.openAnim);
     SetGlobalOpacity(opacity);
+
+    if (Prefs().menuLayout < 0 || Prefs().menuLayout > 1)
+        Prefs().menuLayout = 0;
+
+    if (Prefs().menuLayout == 1)
+    {
+        RenderDropdown(opacity);
+        DrawNotifications(screenAnchor);
+        DrawTooltip();
+        return;
+    }
 
     DrawBackdrop(opacity);
 
@@ -1693,9 +1715,15 @@ void Gui::Render()
             Menu::Open = false;
 
         const float contentX = winMin.x + sidebarW;
-        const float searchMaxW = std::max(140.0f, std::min(280.0f, ws.x - sidebarW - 420.0f));
-        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 72.0f - searchMaxW, winMin.y + 16.0f));
+        const float searchMaxW = std::max(140.0f, std::min(280.0f, ws.x - sidebarW - 460.0f));
+        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 112.0f - searchMaxW, winMin.y + 16.0f));
         SearchField("##search", g.search, sizeof(g.search), searchMaxW, 32.0f);
+
+        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 96.0f, winMin.y + 16.0f));
+        if (IconButton("##dropdownLayout", Icon::List, 32.0f, false))
+            Prefs().menuLayout = 1;
+        if (ImGui::IsItemHovered())
+            SetTooltip("Dropdown columns");
 
         // ------------------------------------------- left category rail (Home)
         if (showSidebar)

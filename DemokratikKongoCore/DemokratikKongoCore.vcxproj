@@ -247,6 +247,7 @@
     <ClInclude Include="src/base/moduleManager/modules/utility/itemLogger.h" />
     <ClInclude Include="src/base/moduleManager/modules/misc/fakeLogin.h" />
     <ClInclude Include="src/base/gui/gui.h" />
+    <ClInclude Include="src/base/gui/dropdownGui.h" />
     <ClInclude Include="src/base/gui/guiCore.h" />
     <ClInclude Include="src/base/gui/guiWidgets.h" />
     <ClInclude Include="src/base/moduleManager/modules/combat/itemWhitelist.h" />
@@ -379,6 +380,7 @@
     <ClCompile Include="src/base/moduleManager/modules/utility/itemLogger.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/misc/fakeLogin.cpp" />
     <ClCompile Include="src/base/gui/gui.cpp" />
+    <ClCompile Include="src/base/gui/dropdownGui.cpp" />
     <ClCompile Include="src/base/gui/guiCore.cpp" />
     <ClCompile Include="src/base/gui/guiWidgets.cpp" />
     <ClCompile Include="src/base/patcher/miniz.c" />
