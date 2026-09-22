@@ -1,5 +1,6 @@
 #include "gui.h"
 
+#include "dropdownGui.h"
 #include "guiCore.h"
 #include "guiWidgets.h"
 
@@ -820,6 +821,15 @@ namespace
 
         SectionLabel("INTERFACE");
 
+        {
+            static const char* kLayouts[] = { "Classic", "Dropdown" };
+            if (Prefs().menuLayout < 0 || Prefs().menuLayout > 1)
+                Prefs().menuLayout = 0;
+            RowDropdown("Menu layout",
+                        desc ? "Classic window, or category columns you can drag apart" : "",
+                        &Prefs().menuLayout, kLayouts, 2);
+        }
+
         RowToggle("Reduce motion", desc ? "Snap animations instead of easing them" : "",
                   &ReduceMotion());
         RowToggle("Show descriptions", desc ? "Display helper text under every option" : "",
@@ -1572,6 +1582,7 @@ void Gui::Shutdown()
 {
     ClearNotifications();
     ReleaseAnimationState();
+    ResetDropdown();
     g = GuiState{};
 }
 
@@ -1601,6 +1612,17 @@ void Gui::Render()
 
     const float opacity = SmoothStep(g.openAnim);
     SetGlobalOpacity(opacity);
+
+    if (Prefs().menuLayout < 0 || Prefs().menuLayout > 1)
+        Prefs().menuLayout = 0;
+
+    if (Prefs().menuLayout == 1)
+    {
+        RenderDropdown(opacity);
+        DrawNotifications(screenAnchor);
+        DrawTooltip();
+        return;
+    }
 
     DrawBackdrop(opacity);
 
@@ -1686,6 +1708,11 @@ void Gui::Render()
             g.shell = Shell_Settings;
             g.search[0] = '\0';
         }
+        ImGui::SameLine(0.0f, 8.0f);
+        if (PillButton("##openDropdown", "Dropdown", ImVec2(108.0f, 36.0f), true))
+            Prefs().menuLayout = 1;
+        if (ImGui::IsItemHovered())
+            SetTooltip("Open the dropdown columns");
         ImGui::EndGroup();
 
         ImGui::SetCursorScreenPos(ImVec2(winMax.x - 56.0f, winMin.y + 16.0f));

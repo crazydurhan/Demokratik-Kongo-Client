@@ -158,7 +158,8 @@ bool ProfileManager::save(const std::string& name)
         o << "    \"notifyModuleToggles\": " << (p.notifyModuleToggles ? "true" : "false") << ",\n";
         o << "    \"notifyProfileConfigs\": " << (p.notifyProfileConfigs ? "true" : "false") << ",\n";
         o << "    \"notifyFriendToggles\": " << (p.notifyFriendToggles ? "true" : "false") << ",\n";
-        o << "    \"notifyPlaySounds\": " << (p.notifyPlaySounds ? "true" : "false") << "\n";
+        o << "    \"notifyPlaySounds\": " << (p.notifyPlaySounds ? "true" : "false") << ",\n";
+        o << "    \"menuLayout\": " << p.menuLayout << "\n";
         o << "  },\n";
     }
 
@@ -255,6 +256,11 @@ bool ProfileManager::load(const std::string& name)
         readBool("notifyProfileConfigs", p.notifyProfileConfigs);
         readBool("notifyFriendToggles", p.notifyFriendToggles);
         readBool("notifyPlaySounds", p.notifyPlaySounds);
+        if (findValue(doc, "gui", "menuLayout", raw))
+        {
+            const int layout = std::atoi(raw.c_str());
+            p.menuLayout = (layout == 1) ? 1 : 0;
+        }
 
         Gui::ApplyPreferences();
     }

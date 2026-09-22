@@ -207,6 +207,9 @@ namespace Gui
         bool  notifyProfileConfigs = true;
         bool  notifyFriendToggles = true;
         bool  notifyPlaySounds = true;
+
+        // 0 = classic shell, 1 = dropdown columns.
+        int   menuLayout = 0;
     };
 
     Preferences& Prefs();
