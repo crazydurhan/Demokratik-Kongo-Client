@@ -17,7 +17,7 @@
 
 /*
 ========================================================================
-    RuntimeHost launcher GUI
+    Demokratik Kongo launcher GUI
 ------------------------------------------------------------------------
     Everything is custom-drawn through ImDrawList so the launcher looks
     like the in-game ClickGUI. Stock ImGui is only used for hit-testing
@@ -178,7 +178,7 @@ void LauncherGui::init(HWND hwnd, const LauncherFonts& fonts, float dpiScale)
     applyStyle();
 
     auto& log = LauncherLog::I();
-    log.info("RuntimeHost launcher v" DK_VERSION_SHORT_STR " - embedded core + optional sibling RuntimeHostCore.dll");
+    log.info("Demokratik Kongo launcher v" DK_VERSION_SHORT_STR " - embedded core + optional sibling RuntimeHostCore.dll");
 
     embeddedPayloadBytes_ = embeddedPayloadSize();
     if (embeddedPayloadBytes_ == 0) {
@@ -732,7 +732,7 @@ float LauncherGui::drawHero(float y)
     dl->AddRectFilledMultiColor(ImVec2(p.x, p.y + h * 0.35f), q,
                                 IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
                                 IM_COL32(8, 8, 12, 190), IM_COL32(8, 8, 12, 190));
-    const char* title = "RuntimeHost";
+    const char* title = "Demokratik Kongo";
     const char* caption = "Minecraft 1.8.9  -  injectable client";
     const ImVec2 titleSize = textSize(fonts_.title, title);
     text(dl, fonts_.title, ImVec2(p.x + s(16.0f) + 1.0f, q.y - s(14.0f) - titleSize.y - s(14.0f) + 1.0f),
