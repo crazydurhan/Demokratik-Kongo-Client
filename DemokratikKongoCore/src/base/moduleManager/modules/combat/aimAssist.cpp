@@ -1,5 +1,7 @@
 #include "aimAssist.h"
 
+#include "antibot.h"
+#include "../../../util/math/geometry.h"
 #include "combatBridge.h"
 #include "friends.h"
 #include "itemWhitelist.h"
@@ -20,17 +22,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <limits>
-#include <mutex>
+#include <random>
 #include <vector>
 
 namespace
 {
-    constexpr float kMaxPitch = 90.0f;
-    constexpr float kMinPitch = -90.0f;
-    constexpr float kAimDeadzoneDeg = 0.15f;
-    constexpr float kMinStableAimHorizontal = 0.08f;
-    constexpr long long kLockGraceMs = 500;   // hedef kaybında grace penceresi
+    // Vanilla EntityLivingBase#getCollisionBorderSize for players.
+    constexpr double kBorderSize = 0.1;
+    constexpr double kRadToDeg = 57.295780181884766;
+    constexpr float  kFarThreshold = 180.0f;
 
     inline long long nowMs()
     {
@@ -38,149 +38,175 @@ namespace
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    inline float horizontalLength(const Vector3& v)
-    {
-        return std::sqrt(v.x * v.x + v.z * v.z);
-    }
-
-    inline float clampf(float v, float lo, float hi)
+    inline double clampd(double v, double lo, double hi)
     {
         return std::max(lo, std::min(v, hi));
     }
 
-    inline Vector3 boxCenter(const BoundingBox& box)
+    inline float wrapTo180(float a)
     {
-        return Vector3{
-            static_cast<float>((box.minX + box.maxX) * 0.5),
-            static_cast<float>((box.minY + box.maxY) * 0.5),
-            static_cast<float>((box.minZ + box.maxZ) * 0.5)
-        };
+        a = std::fmod(a + 180.0f, 360.0f);
+        if (a < 0.0f)
+            a += 360.0f;
+        return a - 180.0f;
     }
 
-    inline Vector3 closestPointOnBox(const Vector3& point, const BoundingBox& box)
+    BoundingBox expandBox(const BoundingBox& b, double e)
     {
-        return Vector3{
-            clampf(point.x, static_cast<float>(box.minX), static_cast<float>(box.maxX)),
-            clampf(point.y, static_cast<float>(box.minY), static_cast<float>(box.maxY)),
-            clampf(point.z, static_cast<float>(box.minZ), static_cast<float>(box.maxZ))
-        };
+        return BoundingBox{ b.minX - e, b.minY - e, b.minZ - e,
+                            b.maxX + e, b.maxY + e, b.maxZ + e };
     }
 
-    inline Vector3 stableClosestPointOnBox(const Vector3& eyes, const BoundingBox& box)
+    Vector3 closestPointOnBox(const BoundingBox& b, const Vector3& p)
     {
-        Vector3 closest = closestPointOnBox(eyes, box);
-        const Vector3 delta = closest - eyes;
-        if (horizontalLength(delta) >= kMinStableAimHorizontal)
-            return closest;
+        return Vector3{
+            static_cast<float>(clampd(p.x, b.minX, b.maxX)),
+            static_cast<float>(clampd(p.y, b.minY, b.maxY)),
+            static_cast<float>(clampd(p.z, b.minZ, b.maxZ)) };
+    }
 
-        // When the player's X/Z overlaps the target AABB, a pure closest-point
-        // clamp can collapse to nearly the eye position. That makes atan2(0, 0)
-        // or tiny X/Z deltas produce unstable yaw near the target. Pin to the
-        // nearest horizontal face instead, while keeping the reach-optimal Y.
-        const Vector3 center = boxCenter(box);
-        const float dx = eyes.x - center.x;
-        const float dz = eyes.z - center.z;
+    bool boxContains(const BoundingBox& b, const Vector3& p)
+    {
+        return p.x >= b.minX && p.x <= b.maxX &&
+               p.y >= b.minY && p.y <= b.maxY &&
+               p.z >= b.minZ && p.z <= b.maxZ;
+    }
 
-        closest.y = clampf(eyes.y,
-            static_cast<float>(box.minY),
-            static_cast<float>(box.maxY));
+    // AxisAlignedBB#calculateIntercept — ray vs AABB, slab method.
+    bool rayIntersectsBox(const Vector3& from, const Vector3& to, const BoundingBox& b)
+    {
+        const double dx = to.x - from.x;
+        const double dy = to.y - from.y;
+        const double dz = to.z - from.z;
 
-        if (std::fabs(dx) >= std::fabs(dz))
+        double tmin = 0.0, tmax = 1.0;
+        const double p[3] = { from.x, from.y, from.z };
+        const double d[3] = { dx, dy, dz };
+        const double bmin[3] = { b.minX, b.minY, b.minZ };
+        const double bmax[3] = { b.maxX, b.maxY, b.maxZ };
+
+        for (int i = 0; i < 3; ++i)
         {
-            closest.x = dx >= 0.0f ? static_cast<float>(box.maxX) : static_cast<float>(box.minX);
-            closest.z = clampf(eyes.z, static_cast<float>(box.minZ), static_cast<float>(box.maxZ));
+            if (std::fabs(d[i]) < 1e-12)
+            {
+                if (p[i] < bmin[i] || p[i] > bmax[i])
+                    return false;
+            }
+            else
+            {
+                double t1 = (bmin[i] - p[i]) / d[i];
+                double t2 = (bmax[i] - p[i]) / d[i];
+                if (t1 > t2) std::swap(t1, t2);
+                tmin = std::max(tmin, t1);
+                tmax = std::min(tmax, t2);
+                if (tmin > tmax)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // RotationUtils#getRotationsToPoint — base-aware, degenerate-yaw safe.
+    void rotationsToPoint(const Vector3& eye, const Vector3& point,
+                          float baseYaw, float basePitch,
+                          float& outYaw, float& outPitch)
+    {
+        const double deltaX = point.x - eye.x;
+        const double deltaZ = point.z - eye.z;
+        const double deltaY = point.y - eye.y;
+        const double horizDistSq = deltaX * deltaX + deltaZ * deltaZ;
+
+        if (horizDistSq < 1.0e-12)
+        {
+            outYaw = baseYaw;
+            outPitch = basePitch + wrapTo180(
+                static_cast<float>(-(std::atan2(deltaY, 0.0) * kRadToDeg)) - basePitch);
         }
         else
         {
-            closest.x = clampf(eyes.x, static_cast<float>(box.minX), static_cast<float>(box.maxX));
-            closest.z = dz >= 0.0f ? static_cast<float>(box.maxZ) : static_cast<float>(box.minZ);
+            const float targetYaw = static_cast<float>(std::atan2(deltaZ, deltaX) * kRadToDeg) - 90.0f;
+            const float targetPitch = static_cast<float>(
+                -(std::atan2(deltaY, std::sqrt(horizDistSq)) * kRadToDeg));
+            outYaw = baseYaw + wrapTo180(targetYaw - baseYaw);
+            outPitch = basePitch + wrapTo180(targetPitch - basePitch);
+        }
+        outPitch = clampd(outPitch, -90.0f, 90.0f);
+    }
+
+    // RotationUtils#smoothRotation — linear step model along the combined
+    // (yaw, pitch) direction, with randomization and proximity slowdown.
+    void smoothRotation(float baseYaw, float basePitch,
+                        float targetYaw, float targetPitch,
+                        int speed, float randomizationPercent,
+                        float& outYaw, float& outPitch)
+    {
+        if (speed <= 0) { outYaw = baseYaw; outPitch = clampd(basePitch, -90.0f, 90.0f); return; }
+        if (speed >= 30) { outYaw = targetYaw; outPitch = clampd(targetPitch, -90.0f, 90.0f); return; }
+
+        const float deltaYaw = wrapTo180(targetYaw - baseYaw);
+        const float deltaPitch = targetPitch - basePitch;
+        const float magnitude = std::sqrt(deltaYaw * deltaYaw + deltaPitch * deltaPitch);
+        if (magnitude < 0.001f)
+        {
+            outYaw = targetYaw;
+            outPitch = clampd(targetPitch, -90.0f, 90.0f);
+            return;
         }
 
-        return closest;
-    }
+        thread_local std::mt19937 rng{ std::random_device{}() };
+        thread_local std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
 
-    inline BoundingBox interpolatedBox(const CommonData::PlayerSnapshot& pd)
-    {
-        const float partial = CommonData::renderPartialTicks;
-        const Vector3 interp = pd.lastPos + (pd.pos - pd.lastPos) * partial;
-        const BoundingBox& cached = pd.boundingBox;
+        const float t = speed / 30.0f;
+        float stepSize = t * t * 180.0f;
 
-        const float halfW = std::max(
-            static_cast<float>((cached.maxX - cached.minX) * 0.5), 0.3f);
+        const float range = 0.6f * (randomizationPercent / 100.0f);
+        const float multiplier = (range <= 0.001f) ? 1.0f
+            : (1.0f - range * 0.5f + uniform(rng) * range);
+        stepSize *= multiplier;
 
-        return BoundingBox{
-            interp.x - halfW, interp.y, interp.z - halfW,
-            interp.x + halfW, interp.y + pd.height, interp.z + halfW
-        };
-    }
+        float proximityFactor = std::min(1.0f, magnitude / kFarThreshold);
+        proximityFactor = std::pow(proximityFactor, 0.7f);
+        const float maxSlowdown = randomizationPercent / 100.0f;
+        // Cap proximity slowdown at 20% so high randomization doesn't kill aim.
+        const float proximityMult = std::max(0.8f, 1.0f - maxSlowdown * (1.0f - proximityFactor));
+        stepSize *= proximityMult;
 
-    inline BoundingBox offsetBox(const BoundingBox& box, const Vector3& delta)
-    {
-        return BoundingBox{
-            box.minX + delta.x, box.minY + delta.y, box.minZ + delta.z,
-            box.maxX + delta.x, box.maxY + delta.y, box.maxZ + delta.z
-        };
-    }
+        const float stepLength = std::min(stepSize, magnitude);
+        const float scale = stepLength / magnitude;
 
-    inline std::string targetNameKey(const CommonData::PlayerSnapshot& pd)
-    {
-        return pd.name.empty() ? pd.displayName : pd.name;
+        outYaw = baseYaw + deltaYaw * scale;
+        outPitch = clampd(basePitch + deltaPitch * scale, -90.0f, 90.0f);
     }
 }
 
-struct AimAssist::TargetInfo
-{
-    CommonData::PlayerSnapshot player;
-    Vector3 aimPoint;
-    Vector3 velocity;
-    float distance = 0.0f;
-    float yawDelta = 0.0f;
-    float pitchDelta = 0.0f;
-    float totalAngle = 0.0f;
-    bool occluded = false;
-    std::string name;
-};
-
 AimAssist::AimAssist()
-    : Module("Aim Assist", "Aura combat helper for close-range target tracking and reach sync.", Category::Combat)
+    : Module("Aim Assist", "raven-bS style aim assist: multipoint aim point, backup face points, smoothed rotation.", Category::Combat)
 {
-    m_mode = &add<EnumSetting>("Mode", std::vector<const char*>{ "Simple", "Adaptive" }, 0);
+    m_speed = &add<NumberSetting>("Speed", 10.0f, 1.0f, 30.0f, 1.0f);
 
-    m_requireMouseDown = &add<BoolSetting>("Require mouse down", true);
-    m_targetLock = &add<BoolSetting>("Target Lock", false);
-    m_strafeIncrease = &add<NumberSetting>("Strafe Increase", 35.0f, 0.0f, 150.0f, 5.0f);
-    m_strafeIncrease->suffix = "%";
+    m_multipointH = &add<NumberSetting>("Multipoint Horizontal", 0.0f, 0.0f, 100.0f, 1.0f);
+    m_multipointH->suffix = "%";
+    m_multipointV = &add<NumberSetting>("Multipoint Vertical", 0.0f, 0.0f, 100.0f, 1.0f);
+    m_multipointV->suffix = "%";
+    m_randomization = &add<NumberSetting>("Randomization", 50.0f, 0.0f, 100.0f, 1.0f);
+    m_randomization->suffix = "%";
 
-    m_checkBlockBreak = &add<BoolSetting>("Check Block Break", true);
-    m_breakBlocksWhitelist = &add<StringSetting>("Break Blocks Whitelist", "pickaxe,shovel,axe,shears");
-    m_breakBlocksWhitelist->itemList = true;
-    m_breakBlocksWhitelist->visible = [this]{ return m_checkBlockBreak->value; };
+    m_fov = &add<NumberSetting>("FOV", 90.0f, 15.0f, 360.0f, 1.0f);
+    m_fov->suffix = " deg";
+    m_range = &add<NumberSetting>("Range", 4.5f, 0.0f, 5.0f, 0.1f);
+    m_range->suffix = " blocks";
 
-    m_aimVertically = &add<BoolSetting>("Aim Vertically", false);
-    m_verticalSpeed = &add<NumberSetting>("Vertical Speed", 3.0f, 0.1f, 20.0f, 0.1f);
-    m_verticalSpeed->suffix = "%";
-    m_verticalSpeed->visible = [this]{ return m_aimVertically->value; };
+    m_sortMode = &add<EnumSetting>("Sort", std::vector<const char*>{ "Health", "Angle", "Distance" }, 1);
 
-    m_horizontalSpeed = &add<NumberSetting>("Horizontal Speed", 5.0f, 0.1f, 20.0f, 0.1f);
-    m_horizontalSpeed->suffix = "%";
-
-    m_maxAngle = &add<NumberSetting>("Max Angle", 60.0f, 1.0f, 180.0f, 1.0f);
-    m_maxAngle->suffix = " deg";
-
-    m_distance = &add<NumberSetting>("Distance", 4.5f, 1.0f, 8.0f, 0.1f);
-    m_distance->suffix = " blocks";
-
-    m_limitItemsEnabled = &add<BoolSetting>("Limit to Items", false);
-    m_allowedItems = &add<StringSetting>("Allowed Items", "sword,axe");
-    m_allowedItems->itemList = true;
-    m_allowedItems->visible = [this]{ return m_limitItemsEnabled->value; };
-
-    m_targetArea = &add<EnumSetting>("Target Area", std::vector<const char*>{ "Center", "Closest" }, 1);
-    m_targetMode = &add<EnumSetting>("Target Mode", std::vector<const char*>{ "Distance", "Yaw", "Health", "Gapple" }, 1);
-
-    m_wallCheck = &add<BoolSetting>("Wall Check", true);
-    m_predictionTicks = &add<NumberSetting>("Prediction Ticks", 2.0f, 0.0f, 10.0f, 0.5f);
-    m_predictionTicks->visible = [this]{ return m_mode->index == 1; };
+    m_ignoreBehindWalls = &add<BoolSetting>("Ignore behind walls", false);
+    m_ignoreBehindEntities = &add<BoolSetting>("Ignore behind entities", false);
+    m_aimInvis = &add<BoolSetting>("Aim invis", false);
+    m_clickAim = &add<BoolSetting>("Require mouse", true);
+    m_stopWhenBreaking = &add<BoolSetting>("Stop when breaking", false);
+    m_hoverDelay = &add<NumberSetting>("Hover delay", 100.0f, 0.0f, 500.0f, 10.0f);
+    m_hoverDelay->suffix = " ms";
+    m_hoverDelay->visible = [this]{ return m_stopWhenBreaking->value; };
+    m_weaponOnly = &add<BoolSetting>("Weapon only", false);
 }
 
 std::string AimAssist::arrayListSuffix(SuffixDetail detail) const
@@ -188,450 +214,430 @@ std::string AimAssist::arrayListSuffix(SuffixDetail detail) const
     if (detail == SuffixDetail::None)
         return "";
 
-    std::string s = m_mode->current();
-    s += " ";
-    s += m_targetMode->current();
-
-    if (m_targetLock->value && !m_lockedTargetName.empty()) {
-        s += " [LOCK:";
-        const size_t maxName = std::min(m_lockedTargetName.size(), size_t(8));
-        s.append(m_lockedTargetName, 0, maxName);
-        s += "]";
-    }
-
     if (detail == SuffixDetail::Basic)
-        return s;
+        return m_sortMode->current();
 
-    char buf[192];
-    std::snprintf(buf, sizeof(buf), "%s %.1f° %.1fb%s",
-        s.c_str(), m_maxAngle->value, m_distance->value,
-        m_requireMouseDown->value ? " [Hold]" : "");
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.0f%% %.0fdeg %.1fb",
+        m_randomization->value, m_fov->value, m_range->value);
     return buf;
-}
-
-bool AimAssist::isLeftMouseHeld() const
-{
-    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 }
 
 bool AimAssist::passesItemFilter() const
 {
-    if (!m_limitItemsEnabled->value)
+    if (!m_weaponOnly->value)
         return true;
-
-    return ItemWhitelist::IsAllowed(ItemWhitelist::GetHeldDisplayName(), m_allowedItems->value);
+    return ItemWhitelist::IsAllowed(ItemWhitelist::GetHeldDisplayName(), "sword,axe");
 }
 
 bool AimAssist::isBreakingAllowedBlock() const
 {
-    if (!m_checkBlockBreak->value || !isLeftMouseHeld() || !SDK::Minecraft)
+    if (!m_stopWhenBreaking->value)
         return false;
 
-    if (CombatBridge::CrosshairOnEntity())
-        return false;
-
-    CMovingObjectPosition mop = SDK::Minecraft->GetMouseOver();
-    if (!mop.GetInstance() || !mop.IsTypeOfBlock())
-        return false;
-
-    return ItemWhitelist::IsAllowed(ItemWhitelist::GetHeldDisplayName(), m_breakBlocksWhitelist->value);
-}
-
-bool AimAssist::isTargetVisible(const Vector3& eyes, const Vector3& aimPoint) const
-{
-    if (!m_wallCheck->value)
-        return true;
-    if (!SDK::Minecraft || !SDK::Minecraft->theWorld)
-        return true;
-
-    RayResult r = SDK::Minecraft->theWorld->rayTraceBlocks(
-        eyes, aimPoint,
-        /*stopOnLiquid=*/false,
-        /*ignoreBlockWithoutBoundingBox=*/true,
-        /*returnLastUncollidableBlock=*/false);
-
-    return !r.hit;
-}
-
-float AimAssist::scoreTarget(const TargetInfo& target) const
-{
-    switch (m_targetMode->index)
+    if (!SDK::Minecraft || !CombatBridge::CrosshairOnEntity())
     {
-        case 0: return target.distance;
-        case 1: return std::fabs(target.yawDelta) + (m_aimVertically->value ? std::fabs(target.pitchDelta) * 0.35f : 0.0f);
-        case 2: return target.player.health + target.player.absorptionAmount;
-        case 3: // Gapple — prefer the player whose regen is closest to expiring
-                // (or has none at all).  No regen = score 0 = best target.
+        // raven checks "is the player actually mining a block".
+        if (SDK::Minecraft)
         {
-            const long long now = nowMs();
-            const long long remaining = target.player.regenEndMs - now;
-            return remaining > 0 ? (float)(remaining / 1000.0) : 0.0f;
+            CMovingObjectPosition mop = SDK::Minecraft->GetMouseOver();
+            if (mop.GetInstance() && mop.IsTypeOfBlock())
+                return true;
         }
-        default: return target.totalAngle;
     }
-}
-
-bool AimAssist::buildTarget(const CommonData::PlayerSnapshot& pd, TargetInfo& outTarget) const
-{
-    if (pd.isLocalPlayer || pd.health <= 0.0f)
-        return false;
-
-    const std::string key = targetNameKey(pd);
-    if (key.empty() || Friends::IsFriend(key))
-        return false;
-
-    CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
-    if (!local)
-        return false;
-
-    const Vector3 eyes = local->GetEyePos();
-    const Vector2 current = local->GetAngles();
-    BoundingBox box = interpolatedBox(pd);
-
-    // Adaptive mode leads the target: shift the whole AABB along the target's
-    // velocity, then pick the aim point inside the *predicted* box. Previously
-    // the predicted point was clamped back into the un-moved box, which
-    // cancelled almost all of the lead.
-    if (m_mode->index == 1)
-    {
-        const Vector3 velocity = pd.pos - pd.lastPos;
-        box = offsetBox(box, velocity * m_predictionTicks->value);
-    }
-
-    Vector3 aimPoint = boxCenter(box);
-    if (m_targetArea->index == 1)
-        aimPoint = stableClosestPointOnBox(eyes, box);
-
-    if (horizontalLength(aimPoint - eyes) < kMinStableAimHorizontal)
-        aimPoint = stableClosestPointOnBox(eyes, box);
-
-    const float distance = eyes.Distance(aimPoint);
-    if (distance > m_distance->value)
-        return false;
-
-    const Vector2 desired = Math::getAngles(eyes, aimPoint);
-    const float yawDelta = Math::wrapAngleTo180(desired.x - current.x);
-    const float pitchDelta = Math::wrapAngleTo180(desired.y - current.y);
-    const float totalAngle = std::sqrt(yawDelta * yawDelta + pitchDelta * pitchDelta);
-
-    const float gateAngle = m_aimVertically->value ? totalAngle : std::fabs(yawDelta);
-    if (gateAngle > m_maxAngle->value)
-        return false;
-
-    outTarget.player = pd;
-    outTarget.aimPoint = aimPoint;
-    outTarget.velocity = pd.pos - pd.lastPos;
-    outTarget.distance = distance;
-    outTarget.yawDelta = yawDelta;
-    outTarget.pitchDelta = pitchDelta;
-    outTarget.totalAngle = totalAngle;
-    outTarget.name = key;
-    return true;
-}
-
-bool AimAssist::findLockedTarget(TargetInfo& outTarget) const
-{
-    if (m_lockedTargetName.empty())
-        return false;
-
-    const std::vector<CommonData::PlayerSnapshot> players = CommonData::SnapshotPlayers();
-
-    for (const auto& pd : players)
-    {
-        if (targetNameKey(pd) != m_lockedTargetName)
-            continue;
-
-        if (!buildTarget(pd, outTarget))
-            return false;
-
-        CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
-        if (local)
-        {
-            const Vector3 eyes = local->GetEyePos();
-            if (!isTargetVisible(eyes, outTarget.aimPoint))
-                outTarget.occluded = true;
-        }
-        return true;
-    }
-
     return false;
 }
 
-bool AimAssist::findTarget(TargetInfo& outTarget)
+// raven AimAssist#conditionsMet
+bool AimAssist::conditionsMet()
 {
-    const long long now = nowMs();
-
-    // ---- 1) Locked target dene ----
-    if (!m_lockedTargetName.empty())
-    {
-        TargetInfo temp{};
-        if (findLockedTarget(temp))
-        {
-            if (temp.occluded)
-            {
-                // Locked target wall arkasında — grace içinde pause
-                if (now - m_lockValidMs < kLockGraceMs)
-                    return false;
-
-                // Grace bitti — lock düşür, scan'e devam
-                clearLock();
-            }
-            else
-            {
-                m_lockValidMs = now;
-                outTarget = temp;
-                return true;
-            }
-        }
-        else
-        {
-            // Locked target oyuncu listesinde yok (öldü/despawn)
-            if (m_targetLock->value && m_requireMouseDown->value && isLeftMouseHeld()
-                && (now - m_lockValidMs) < kLockGraceMs)
-                return false;
-
-            clearLock();
-        }
-    }
-
-    // ---- 2) Tarama ----
-    CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
-    if (!local)
+    if (!CombatBridge::InGame() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
         return false;
-    const Vector3 eyes = local->GetEyePos();
-
-    const std::vector<CommonData::PlayerSnapshot> players = CommonData::SnapshotPlayers();
-
-    bool found = false;
-    float bestScore = std::numeric_limits<float>::max();
-    TargetInfo best{};
-
-    for (const auto& pd : players)
-    {
-        TargetInfo candidate{};
-        if (!buildTarget(pd, candidate))
-            continue;
-
-        if (m_wallCheck->value && !isTargetVisible(eyes, candidate.aimPoint))
-            continue;
-
-        const float score = scoreTarget(candidate);
-        if (!found || score < bestScore)
-        {
-            found = true;
-            bestScore = score;
-            best = candidate;
-        }
-    }
-
-    if (!found)
+    if (!passesItemFilter())
         return false;
-
-    outTarget = best;
-    if ((m_requireMouseDown->value || m_targetLock->value) && m_lockedTargetName.empty())
+    if (m_clickAim->value && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
+        return false;
+    if (m_stopWhenBreaking->value && isBreakingAllowedBlock())
     {
-        m_lockedTargetName = best.name;
-        m_lockValidMs = now;
+        if (m_miningStartTime == -1)
+            m_miningStartTime = nowMs();
+        const long long elapsed = nowMs() - m_miningStartTime;
+        if (elapsed >= m_hoverDelay->value)
+            return false;
+    }
+    else
+    {
+        m_miningStartTime = -1;
     }
     return true;
 }
 
-bool AimAssist::isStrafing(const TargetInfo& target) const
+// RotationUtils#getAimPoint — center pulled toward the eye-closest point by
+// the multipoint factors.
+Vector3 AimAssist::getAimPoint(const CommonData::PlayerSnapshot& pd, const BoundingBox& rawBox) const
 {
-    if (horizontalLength(target.velocity) > 0.025f)
-        return true;
+    CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
+    const BoundingBox box = expandBox(rawBox, kBorderSize);
+    const Vector3 eye = local->GetEyePos();
 
-    if (!SDK::Minecraft || !SDK::Minecraft->thePlayer)
-        return false;
+    const float centerX = static_cast<float>((box.minX + box.maxX) * 0.5);
+    const float centerZ = static_cast<float>((box.minZ + box.maxZ) * 0.5);
+    // Living entities aim at eye height (posY + eyeHeight); vanilla eyeHeight
+    // for players is height * 0.9.
+    const float centerY = pd.pos.y + pd.height * 0.9f;
 
-    const Vector3 localPos = SDK::Minecraft->thePlayer->GetPos();
-    if (!m_haveLastLocalPos)
-        return false;
+    if (boxContains(box, eye))
+        return Vector3{ centerX, eye.y, centerZ };
 
-    // Threshold is a per-50ms displacement; scale by the real sample window
-    // so per-frame sampling matches the old per-tick sensitivity.
-    const long long dtMs = std::max(1LL, nowMs() - m_lastLocalPosMs);
-    const float threshold = 0.025f * (static_cast<float>(dtMs) / 50.0f);
-    return horizontalLength(localPos - m_lastLocalPos) > threshold;
+    const Vector3 cl = closestPointOnBox(box, eye);
+    const float tH = static_cast<float>(clampd(m_multipointH->value / 100.0, 0.0, 1.0));
+    const float tV = static_cast<float>(clampd(m_multipointV->value / 100.0, 0.0, 1.0));
+
+    return Vector3{
+        centerX + (cl.x - centerX) * tH,
+        centerY + (cl.y - centerY) * tV,
+        centerZ + (cl.z - centerZ) * tH };
 }
 
-void AimAssist::applyAim(const TargetInfo& target)
+// RotationUtils#mainRayHitsTargetAABB — extend the ray to `range` and require
+// it to still cross the target's (expanded) box.
+bool AimAssist::mainRayHitsTargetAabb(const Vector3& eye, const Vector3& point,
+                                      const BoundingBox& targetBox, float range) const
+{
+    const double dx = point.x - eye.x;
+    const double dy = point.y - eye.y;
+    const double dz = point.z - eye.z;
+    const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-6)
+        return false;
+
+    const double scale = range / len;
+    const Vector3 end{
+        static_cast<float>(eye.x + dx * scale),
+        static_cast<float>(eye.y + dy * scale),
+        static_cast<float>(eye.z + dz * scale) };
+
+    return rayIntersectsBox(eye, end, expandBox(targetBox, kBorderSize));
+}
+
+// RotationUtils#buildBackupPoints — grid of points on the faces of the target
+// box facing the eye (BACKUP_TARGET_TOTAL = 30, inset 0.05).
+std::vector<Vector3> AimAssist::buildBackupPoints(const BoundingBox& rawBox, const Vector3& eye) const
+{
+    constexpr double kInset = 0.05;
+    constexpr int kTargetTotal = 30;
+
+    const BoundingBox box = expandBox(rawBox, kBorderSize);
+    const double sizeX = box.maxX - box.minX;
+    const double sizeY = box.maxY - box.minY;
+    const double sizeZ = box.maxZ - box.minZ;
+
+    const bool xPos = eye.x > box.maxX, xNeg = eye.x < box.minX;
+    const bool yPos = eye.y > box.maxY, yNeg = eye.y < box.minY;
+    const bool zPos = eye.z > box.maxZ, zNeg = eye.z < box.minZ;
+
+    const int visibleFaceCount =
+        (xPos || xNeg ? 1 : 0) + (yPos || yNeg ? 1 : 0) + (zPos || zNeg ? 1 : 0);
+    if (visibleFaceCount == 0)
+        return {};
+
+    const int pointsPerFace = kTargetTotal / visibleFaceCount;
+    std::vector<Vector3> points;
+    points.reserve(kTargetTotal + 6);
+
+    auto addFaceGrid = [&](int fixedAxis, double fixedVal,
+                           double uMin, double uMax, double vMin, double vMax,
+                           int targetPoints, double dimU, double dimV)
+    {
+        if (dimU < 1e-4 || dimV < 1e-4)
+        {
+            const double uMid = (uMin + uMax) * 0.5;
+            const double vMid = (vMin + vMax) * 0.5;
+            if (fixedAxis == 0)      points.emplace_back(Vector3{ static_cast<float>(fixedVal), static_cast<float>(uMid), static_cast<float>(vMid) });
+            else if (fixedAxis == 1) points.emplace_back(Vector3{ static_cast<float>(uMid), static_cast<float>(fixedVal), static_cast<float>(vMid) });
+            else                     points.emplace_back(Vector3{ static_cast<float>(uMid), static_cast<float>(vMid), static_cast<float>(fixedVal) });
+            return;
+        }
+
+        const double ratio = dimU / dimV;
+        const int gridU = std::max(2, static_cast<int>(std::lround(std::sqrt(targetPoints * ratio))));
+        const int gridV = std::max(2, static_cast<int>(std::lround(std::sqrt(targetPoints / ratio))));
+
+        for (int i = 0; i < gridU; ++i)
+        {
+            const double u = uMin + (uMax - uMin) * i / (gridU - 1);
+            for (int j = 0; j < gridV; ++j)
+            {
+                const double v = vMin + (vMax - vMin) * j / (gridV - 1);
+                if (fixedAxis == 0)      points.emplace_back(Vector3{ static_cast<float>(fixedVal), static_cast<float>(u), static_cast<float>(v) });
+                else if (fixedAxis == 1) points.emplace_back(Vector3{ static_cast<float>(u), static_cast<float>(fixedVal), static_cast<float>(v) });
+                else                     points.emplace_back(Vector3{ static_cast<float>(u), static_cast<float>(v), static_cast<float>(fixedVal) });
+            }
+        }
+    };
+
+    if (xPos || xNeg)
+        addFaceGrid(0, xPos ? box.maxX - kInset : box.minX + kInset,
+                    box.minY + kInset, box.maxY - kInset,
+                    box.minZ + kInset, box.maxZ - kInset,
+                    pointsPerFace, sizeY, sizeZ);
+    if (yPos || yNeg)
+        addFaceGrid(1, yPos ? box.maxY - kInset : box.minY + kInset,
+                    box.minX + kInset, box.maxX - kInset,
+                    box.minZ + kInset, box.maxZ - kInset,
+                    pointsPerFace, sizeX, sizeZ);
+    if (zPos || zNeg)
+        addFaceGrid(2, zPos ? box.maxZ - kInset : box.minZ + kInset,
+                    box.minX + kInset, box.maxX - kInset,
+                    box.minY + kInset, box.maxY - kInset,
+                    pointsPerFace, sizeX, sizeY);
+
+    return points;
+}
+
+// AimAssist#getEnemy — candidate filter + sort + (optionally) ray fallback.
+bool AimAssist::getEnemy(AimTarget& out)
+{
+    CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
+    if (!local)
+        return false;
+
+    const Vector3 eye = local->GetEyePos();
+    const Vector2 view = local->GetAngles();
+    const float range = m_range->value;
+    const float rangeSq = range * range;
+    const int fovVal = static_cast<int>(m_fov->value);
+
+    struct Candidate
+    {
+        CommonData::PlayerSnapshot player;
+        BoundingBox box{};
+        float distanceSq = 0.0f;
+        float score = 0.0f;
+    };
+
+    std::vector<Candidate> candidates;
+
+    for (const auto& pd : CommonData::SnapshotPlayers())
+    {
+        if (pd.isLocalPlayer || pd.health <= 0.0f)
+            continue;
+        const std::string& key = pd.name.empty() ? pd.displayName : pd.name;
+        if (key.empty() || Friends::IsFriend(key))
+            continue;
+        if (!m_aimInvis->value && pd.isInvisible)
+            continue;
+        if (AntiBot::IsBot(key))
+            continue;
+
+        const BoundingBox rawBox = pd.boundingBox;
+        const BoundingBox box = expandBox(rawBox, kBorderSize);
+        const Vector3 cl = closestPointOnBox(box, eye);
+        const Vector3 ecl = eye - cl;
+        const float dsq = ecl.Length() * ecl.Length();
+        if (dsq > rangeSq)
+            continue;
+
+        Candidate c;
+        c.player = pd;
+        c.box = rawBox;
+        c.distanceSq = dsq;
+
+        // FOV gate (raven: Utils.inFov with the view yaw).
+        if (fovVal != 360)
+        {
+            const float angleToEntity = static_cast<float>(
+                -std::atan2(pd.pos.x - eye.x, pd.pos.z - eye.z) * kRadToDeg);
+            float diff = wrapTo180(view.x - angleToEntity);
+            if (diff > fovVal * 0.5f || diff < -fovVal * 0.5f)
+                continue;
+        }
+
+        // Sort score (raven comparators; lower = better).
+        switch (m_sortMode->index)
+        {
+            case 0: // Health (lower first)
+                c.score = pd.health + pd.absorptionAmount;
+                break;
+            case 1: // Angle (smaller first)
+            {
+                Vector3 ap = getAimPoint(pd, rawBox);
+                float ty, tp;
+                rotationsToPoint(eye, ap, view.x, view.y, ty, tp);
+                c.score = std::fabs(wrapTo180(view.x - ty)) + std::fabs(view.y - tp);
+                break;
+            }
+            default: // Distance (closer first)
+                c.score = dsq;
+                break;
+        }
+
+        candidates.push_back(std::move(c));
+    }
+
+    if (candidates.empty())
+        return false;
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const Candidate& a, const Candidate& b)
+        {
+            if (a.score != b.score)
+                return a.score < b.score;
+            return a.distanceSq < b.distanceSq;
+        });
+
+    // raven: when either "ignore behind ..." is on, walk the sorted list and
+    // pick the first candidate with a valid aim point (main ray + backups).
+    if (m_ignoreBehindWalls->value || m_ignoreBehindEntities->value)
+    {
+        const bool allowThroughBlocks = !m_ignoreBehindWalls->value;
+        const bool allowThroughEntities = !m_ignoreBehindEntities->value;
+        (void)allowThroughBlocks; // raven's canAimAtPoint stubs block checks.
+
+        const std::vector<CommonData::PlayerSnapshot> all = CommonData::SnapshotPlayers();
+
+        for (const auto& c : candidates)
+        {
+            const Vector3 mainPoint = getAimPoint(c.player, c.box);
+            if (!mainRayHitsTargetAabb(eye, mainPoint, c.box, range))
+                continue;
+
+            // Entity occlusion: any other tracked player whose expanded box
+            // blocks the eye->point ray closer than the target.
+            if (!allowThroughEntities)
+            {
+                bool blocked = false;
+                for (const auto& other : all)
+                {
+                    if (other.isLocalPlayer)
+                        continue;
+                    const std::string& ok = other.name.empty() ? other.displayName : other.name;
+                    const std::string& ck = c.player.name.empty() ? c.player.displayName : c.player.name;
+                    if (ok == ck)
+                        continue;
+                    if (rayIntersectsBox(eye, mainPoint, expandBox(other.boundingBox, kBorderSize)))
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+                if (blocked)
+                    continue;
+            }
+
+            out.player = c.player;
+            out.aimPoint = mainPoint;
+            out.distanceSq = c.distanceSq;
+            out.name = c.player.name.empty() ? c.player.displayName : c.player.name;
+            return true;
+        }
+        return false;
+    }
+
+    const Candidate& best = candidates.front();
+    out.player = best.player;
+    out.aimPoint = getAimPoint(best.player, best.box);
+    out.distanceSq = best.distanceSq;
+    out.name = best.player.name.empty() ? best.player.displayName : best.player.name;
+    return true;
+}
+
+// RotationHelper#getRotationsToTarget (Normal mode) — multipoint aim point,
+// optional ray fallback, then smoothRotation with randomization.
+bool AimAssist::findRotations(const CommonData::PlayerSnapshot& pd, float& outYaw, float& outPitch)
+{
+    CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
+    if (!local)
+        return false;
+
+    const Vector3 eye = local->GetEyePos();
+    const Vector2 view = local->GetAngles();
+    const BoundingBox rawBox = pd.boundingBox;
+
+    Vector3 mainPoint = getAimPoint(pd, rawBox);
+    const bool useBackup = m_ignoreBehindWalls->value || m_ignoreBehindEntities->value;
+
+    if (useBackup && !mainRayHitsTargetAabb(eye, mainPoint, rawBox, m_range->value))
+    {
+        // getRotationsWithBackup: main ray can't reach the aim point inside
+        // `range` — fall back to the closest backup face point.
+        std::vector<Vector3> backups = buildBackupPoints(rawBox, eye);
+        std::sort(backups.begin(), backups.end(),
+            [&eye](const Vector3& a, const Vector3& b)
+            {
+                const Vector3 da = a - eye, db = b - eye;
+                return da.Length() < db.Length();
+            });
+
+        bool found = false;
+        for (const Vector3& p : backups)
+        {
+            // raven's canAimAtPoint only rejects degenerate rays.
+            const Vector3 d = p - eye;
+            if (d.Length() < 1e-3f)
+                continue;
+            mainPoint = p;
+            found = true;
+            break;
+        }
+        if (!found)
+            return false;
+    }
+
+    const Vector3 toPoint = mainPoint - eye;
+    if (toPoint.Length() < 1e-3f)
+        return false;
+
+    float targetYaw, targetPitch;
+    rotationsToPoint(eye, mainPoint, view.x, view.y, targetYaw, targetPitch);
+    smoothRotation(view.x, view.y, targetYaw, targetPitch,
+        static_cast<int>(m_speed->value), m_randomization->value,
+        outYaw, outPitch);
+    return true;
+}
+
+void AimAssist::applyRotation(float yaw, float pitch)
 {
     CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
     if (!local)
         return;
-
-    const Vector2 current = local->GetAngles();
-    float hSpeed = m_horizontalSpeed->value / 100.0f;
-    float vSpeed = m_verticalSpeed->value / 100.0f;
-
-    if (isStrafing(target))
-    {
-        const float boost = 1.0f + (m_strafeIncrease->value / 100.0f);
-        hSpeed *= boost;
-    }
-
-    if (m_mode->index == 1)
-    {
-        const float yawFactor = clampf(std::fabs(target.yawDelta) / std::max(m_maxAngle->value, 1.0f), 0.25f, 1.0f);
-        hSpeed *= 0.55f + yawFactor * 0.65f;
-        vSpeed *= 0.55f + yawFactor * 0.55f;
-    }
-
-    hSpeed = clampf(hSpeed, 0.001f, 0.85f);
-    vSpeed = clampf(vSpeed, 0.001f, 0.85f);
-
-    // Speeds are tuned as a per-20Hz-tick fraction of the remaining angle.
-    // Aim now applies every frame, so rescale by elapsed time (exponential
-    // step) to keep the same convergence rate at any FPS.
-    const long long now = nowMs();
-    const long long dtMs = m_lastApplyMs > 0 ? now - m_lastApplyMs : 50;
-    m_lastApplyMs = now;
-    // Capping the exponent at one tick meant a 100ms frame only ever applied
-    // 50ms worth of rotation, halving the effective speed at low FPS. Allow up
-    // to 4 ticks of catch-up; beyond that a hitch would snap the view.
-    const float tickFraction = clampf(static_cast<float>(dtMs) / 50.0f, 0.0f, 4.0f);
-    hSpeed = 1.0f - std::pow(1.0f - hSpeed, tickFraction);
-    vSpeed = 1.0f - std::pow(1.0f - vSpeed, tickFraction);
-
-    const float yawStep = std::fabs(target.yawDelta) < kAimDeadzoneDeg ? 0.0f : target.yawDelta * hSpeed;
-    const float pitchStep = std::fabs(target.pitchDelta) < kAimDeadzoneDeg ? 0.0f : target.pitchDelta * vSpeed;
-
-    const float newYaw = Math::wrapAngleTo180(current.x + yawStep);
-    float newPitch = current.y;
-    if (m_aimVertically->value)
-        newPitch = clampf(current.y + pitchStep, kMinPitch, kMaxPitch);
-
-    local->SetAngles(Vector2{ newYaw, newPitch });
-}
-
-void AimAssist::clearLock()
-{
-    m_lockedTargetName.clear();
-    m_lockValidMs = 0;
+    local->SetAngles(Vector2{ yaw, pitch });
 }
 
 void AimAssist::onEnable()
 {
-    clearLock();
-    m_hasCachedTarget = false;
-    m_cachedTargetName.clear();
-}
-
-// Aim runs per frame (renderWorldPass hook on the client thread) instead of
-// per 20Hz tick — rotation steps are dt-normalized inside applyAim so the
-// convergence rate stays identical at any FPS.
-void AimAssist::onRender3D(float /*partialTicks*/)
-{
-    tickAim();
+    m_miningStartTime = -1;
+    m_lastTickMs = 0;
 }
 
 void AimAssist::onDisable()
 {
-    clearLock();
-    m_wasMouseHeld = false;
-    m_haveLastLocalPos = false;
-    m_lastLocalPosMs = 0;
-    m_lastAimMs = 0;
-    m_lastApplyMs = 0;
-    m_hasCachedTarget = false;
-    m_cachedTargetName.clear();
+    m_miningStartTime = -1;
+}
+
+// raven applies aim per tick (onUpdate). Gate to 20Hz so smoothRotation's
+// per-step model matches Raven's pacing at any FPS.
+void AimAssist::onRender3D(float /*partialTicks*/)
+{
+    const long long now = nowMs();
+    if (now - m_lastTickMs < 50)
+        return;
+    m_lastTickMs = now;
+    tickAim();
 }
 
 void AimAssist::tickAim()
 {
-    const long long now = nowMs();
-    const bool mouseHeld = isLeftMouseHeld();
-    if (!mouseHeld && m_wasMouseHeld)
-    {
-        if (m_requireMouseDown->value || !m_targetLock->value)
-            clearLock();
-    }
-    m_wasMouseHeld = mouseHeld;
-
-    if (!CombatBridge::InGame() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
-    {
-        clearLock();
-        m_haveLastLocalPos = false;
-        m_hasCachedTarget = false;
-        m_cachedTargetName.clear();
+    if (!conditionsMet())
         return;
-    }
 
-    if (m_requireMouseDown->value && !mouseHeld)
-    {
-        m_hasCachedTarget = false;
-        m_cachedTargetName.clear();
+    AimTarget enemy;
+    if (!getEnemy(enemy))
         return;
-    }
 
-    if (!passesItemFilter())
-    {
-        m_hasCachedTarget = false;
-        m_cachedTargetName.clear();
+    float yaw = 0.0f, pitch = 0.0f;
+    if (!findRotations(enemy.player, yaw, pitch))
         return;
-    }
 
-    if (isBreakingAllowedBlock())
-    {
-        m_hasCachedTarget = false;
-        m_cachedTargetName.clear();
-        return;
-    }
-
-    // === Target selection (expensive: iterate players, raycast visibility) ===
-    // Runs at 20Hz — the "best target" doesn't change faster than that.
-    if (now - m_lastTargetScanMs >= 50)
-    {
-        m_lastTargetScanMs = now;
-        TargetInfo target{};
-        if (findTarget(target))
-        {
-            m_cachedTargetName = target.name;
-            m_hasCachedTarget = true;
-        }
-        else
-        {
-            m_hasCachedTarget = false;
-            m_cachedTargetName.clear();
-            if (!m_targetLock->value || !m_requireMouseDown->value || !mouseHeld)
-                clearLock();
-        }
-    }
-
-    // === Aim application (every tick, fresh deltas) ===
-    // Recompute yaw/pitch from the CURRENT eye position to the target's
-    // CURRENT position. This gives smooth convergence without overshoot —
-    // the old "cache deltas" approach applied the same delta repeatedly
-    // which caused visible jitter as the angle overshot the target.
-    if (m_hasCachedTarget && !m_cachedTargetName.empty())
-    {
-        const std::vector<CommonData::PlayerSnapshot> players = CommonData::SnapshotPlayers();
-
-        bool found = false;
-        for (const auto& pd : players)
-        {
-            if (targetNameKey(pd) == m_cachedTargetName)
-            {
-                found = true;
-                TargetInfo target{};
-                if (buildTarget(pd, target))
-                {
-                    applyAim(target);
-                }
-                break;
-            }
-        }
-        if (!found)
-        {
-            m_hasCachedTarget = false;
-            m_cachedTargetName.clear();
-            clearLock();
-        }
-    }
-
-    m_lastAimMs = now;
-    m_lastLocalPos = SDK::Minecraft->thePlayer->GetPos();
-    m_lastLocalPosMs = now;
-    m_haveLastLocalPos = true;
+    applyRotation(yaw, pitch);
 }
