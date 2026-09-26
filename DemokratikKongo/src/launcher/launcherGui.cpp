@@ -834,7 +834,12 @@ void LauncherGui::drawProcessPopup(ImVec2 anchor, float width)
     const int rows = std::max<int>(1, static_cast<int>(processes_.size()));
     const float headerH = s(30.0f);
     const float footerH = s(38.0f);
-    const float popupH = headerH + rowH * static_cast<float>(rows) + footerH + s(8.0f);
+    // Cap the list height so the popup never escapes the main window; the list
+    // region scrolls when there are more processes than fit.
+    const float maxListH = s(250.0f);
+    const float listH = ImMin(rowH * static_cast<float>(rows), maxListH);
+    const bool listScrolls = rowH * static_cast<float>(rows) > listH + 1.0f;
+    const float popupH = headerH + listH + s(10.0f) + footerH + s(8.0f);
 
     ImGui::SetNextWindowPos(ImVec2(anchor.x, anchor.y + ImLerp(-s(8.0f), 0.0f, alpha)));
     ImGui::SetNextWindowSize(ImVec2(width, popupH));
@@ -854,26 +859,37 @@ void LauncherGui::drawProcessPopup(ImVec2 anchor, float width)
         dl->AddLine(ImVec2(x + s(10.0f), y + headerH - 0.5f), ImVec2(x + width - s(10.0f), y + headerH - 0.5f),
                     pal::Alpha(pal::kLine, alpha), 1.0f);
         y += headerH;
+        const float listTop = y;
 
-        if (processes_.empty()) {
-            textIn(dl, fonts_.regular, ImVec2(x, y), ImVec2(x + width, y + rowH),
-                   pal::Alpha(pal::kTextMute, alpha), "No candidates found");
-            y += rowH;
-        }
+        ImGui::SetCursorScreenPos(ImVec2(x + s(6.0f), y));
+        const ImGuiWindowFlags listFlags = ImGuiWindowFlags_NoBackground |
+            (listScrolls ? ImGuiWindowFlags_AlwaysVerticalScrollbar : ImGuiWindowFlags_None);
+        ImGui::BeginChild("##proclist", ImVec2(width - s(12.0f), listH), ImGuiChildFlags_None, listFlags);
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const float rowW = ImGui::GetContentRegionAvail().x;
 
-        for (int i = 0; i < static_cast<int>(processes_.size()); ++i) {
-            const McProcess& p = processes_[static_cast<size_t>(i)];
-            ImGui::PushID(i);
-            ImGui::SetCursorScreenPos(ImVec2(x + s(6.0f), y));
-            const bool rowClicked = ImGui::InvisibleButton("##row", ImVec2(width - s(12.0f), rowH));
-            const ImGuiID rid = ImGui::GetItemID();
-            const float hover = easeState(subId(rid, "hover"), ImGui::IsItemHovered() ? 1.0f : 0.0f, 16.0f);
-            const bool selected = selectedIndex_ == i;
-            const float sel = easeState(subId(rid, "sel"), selected ? 1.0f : 0.0f, 16.0f, selected ? 1.0f : 0.0f);
-            ImGui::PopID();
+            if (processes_.empty()) {
+                const ImVec2 et = ImGui::GetCursorScreenPos();
+                textIn(dl, fonts_.regular, et, ImVec2(et.x + rowW, et.y + rowH),
+                       pal::Alpha(pal::kTextMute, alpha), "No candidates found");
+                ImGui::Dummy(ImVec2(rowW, rowH));
+            }
 
-            const ImVec2 rmin(x + s(6.0f), y + s(2.0f));
-            const ImVec2 rmax(x + width - s(6.0f), y + rowH - s(2.0f));
+            for (int i = 0; i < static_cast<int>(processes_.size()); ++i) {
+                const McProcess& p = processes_[static_cast<size_t>(i)];
+                ImGui::PushID(i);
+                ImGui::SetCursorPos(ImVec2(0.0f, static_cast<float>(i) * rowH));
+                const bool rowClicked = ImGui::InvisibleButton("##row", ImVec2(rowW, rowH));
+                const ImGuiID rid = ImGui::GetItemID();
+                const float hover = easeState(subId(rid, "hover"), ImGui::IsItemHovered() ? 1.0f : 0.0f, 16.0f);
+                const bool selected = selectedIndex_ == i;
+                const float sel = easeState(subId(rid, "sel"), selected ? 1.0f : 0.0f, 16.0f, selected ? 1.0f : 0.0f);
+                ImGui::PopID();
+
+                const ImVec2 itemMin = ImGui::GetItemRectMin();
+                const ImVec2 rmin(itemMin.x, itemMin.y + s(2.0f));
+                const ImVec2 rmax(ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y - s(2.0f));
             if (hover > 0.01f)
                 dl->AddRectFilled(rmin, rmax, pal::Alpha(pal::kCardHover, hover * alpha), s(7.0f));
             if (sel > 0.01f) {
@@ -909,9 +925,11 @@ void LauncherGui::drawProcessPopup(ImVec2 anchor, float width)
                 manualSelect_ = true;
                 ImGui::CloseCurrentPopup();
             }
-            y += rowH;
+        }
+        ImGui::EndChild();
         }
 
+        y = listTop + listH;
         dl->AddLine(ImVec2(x + s(10.0f), y + s(3.5f)), ImVec2(x + width - s(10.0f), y + s(3.5f)),
                     pal::Alpha(pal::kLine, alpha), 1.0f);
         y += s(8.0f);
