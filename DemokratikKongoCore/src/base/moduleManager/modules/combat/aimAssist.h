@@ -19,7 +19,7 @@ public:
     AimAssist();
 
     void onEnable() override;
-    void onRender3D(float partialTicks) override;
+    void onTick() override;
     void onDisable() override;
 
     std::string arrayListSuffix(SuffixDetail detail) const override;
@@ -49,8 +49,6 @@ private:
     bool findRotations(const CommonData::PlayerSnapshot& pd, float& outYaw, float& outPitch);
     void applyRotation(float yaw, float pitch);
 
-    void tickAim();
-
     EnumSetting*   m_sortMode = nullptr;      // Health / Angle / Distance
     NumberSetting* m_speed = nullptr;         // 1-30, raven smoothing speed
     NumberSetting* m_multipointH = nullptr;   // 0-100 %
@@ -68,5 +66,4 @@ private:
     BoolSetting*   m_weaponOnly = nullptr;
 
     long long m_miningStartTime = -1;
-    long long m_lastTickMs = 0;               // 20Hz gate
 };
