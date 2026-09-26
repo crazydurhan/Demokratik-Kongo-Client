@@ -283,8 +283,8 @@ void ChestStealer::clientTick()
     std::uniform_int_distribution<int> dist((int)minD, (int)maxD);
     m_nextDelayMs = dist(gen);
 
-    // Auto close container if empty or completely looted
-    if (m_autoClose->value && (!hasItemsLeft || !lootedAny))
+    // Auto close container only when empty (never close with items left)
+    if (m_autoClose->value && !hasItemsLeft)
     {
         static jmethodID s_closeScreenMid = nullptr;
         if (!s_closeScreenMid)

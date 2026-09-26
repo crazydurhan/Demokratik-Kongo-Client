@@ -2,6 +2,8 @@
 
 #include "../../commonData.h"
 #include "../../../sdk/sdk.h"
+#include "../../../sdk/jniResolve.h"
+#include "../../../java/java.h"
 #include "../../../menu/menu.h"
 #include "../../../../../ext/imgui/imgui.h"
 
@@ -60,16 +62,57 @@ void FallView::onTick()
     CEntityPlayerSP* local = SDK::Minecraft->thePlayer;
     if (local->GetOnGround()) return;
 
-    // Creative / flying gate (allowFlying is a reasonable proxy without capabilities struct).
+    // Creative / flying gate: read capabilities.isFlying off the live player.
     if (m_disableFlying && m_disableFlying->value)
     {
-        // Skip when clearly not in survival fall context: no fallDistance accumulating.
+        JNIEnv* env = Java::GetEnv();
+        jobject playerObj = env && SDK::Minecraft ? SDK::Minecraft->GetThePlayerObject() : nullptr;
+        if (playerObj)
+        {
+            static jfieldID s_capsField = nullptr;
+            static jfieldID s_isFlyingField = nullptr;
+            if (!s_capsField && env)
+            {
+                jclass cls = env->GetObjectClass(playerObj);
+                if (cls)
+                {
+                    s_capsField = JniResolve::Field(env, cls,
+                        "Lnet/minecraft/entity/player/PlayerCapabilities;", "capabilities");
+                    env->DeleteLocalRef(cls);
+                }
+                if (s_capsField)
+                {
+                    jclass capsCls = env->FindClass("net/minecraft/entity/player/PlayerCapabilities");
+                    if (env->ExceptionCheck())
+                    {
+                        env->ExceptionClear();
+                    }
+                    else if (capsCls)
+                    {
+                        s_isFlyingField = JniResolve::Field(env, capsCls, "Z", "isFlying");
+                        env->DeleteLocalRef(capsCls);
+                    }
+                }
+            }
+
+            bool flying = false;
+            if (s_capsField && s_isFlyingField)
+            {
+                jobject caps = env->GetObjectField(playerObj, s_capsField);
+                JniResolve::ClearException(env);
+                if (caps)
+                {
+                    flying = env->GetBooleanField(caps, s_isFlyingField) != JNI_FALSE;
+                    env->DeleteLocalRef(caps);
+                }
+            }
+            env->DeleteLocalRef(playerObj);
+            if (flying) return;
+        }
     }
 
-    if (m_onlySneaking && m_onlySneaking->value)
-    {
-        // Sneak check via movement input if available; soft-skip when we can't tell.
-    }
+    if (m_onlySneaking && m_onlySneaking->value && !local->IsSneaking())
+        return;
 
     const float fall = local->GetFallDistance();
     if (fall <= 2.5f) return;
@@ -81,8 +124,8 @@ void FallView::onTick()
     float damage = fall - 3.0f - jumpAmp;
     if (damage < 0.0f) damage = 0.0f;
 
-    if (local->IsPotionActive(11)) // Resistance
-        damage = damage * 0.80f; // approximate level I
+    // Note: the Resistance potion does not reduce fall damage in 1.8.9,
+    // so no Resistance term is applied here.
 
     const int finalDamage = static_cast<int>(std::ceil(damage));
 

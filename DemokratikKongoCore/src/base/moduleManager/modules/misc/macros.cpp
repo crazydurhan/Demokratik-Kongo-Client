@@ -247,6 +247,19 @@ void Macros::tickUseStateMachine()
     if (!canRun()) {
         m_useState = UseState::Idle;
         m_activeUseSlot = -1;
+
+        // Restore the hotbar slot if we bailed mid-use (mirrors WaitUse/WaitBack).
+        JNIEnv* env = Java::GetEnv();
+        jobject playerObj = env && SDK::Minecraft ? SDK::Minecraft->GetThePlayerObject() : nullptr;
+        if (playerObj) {
+            jobject invObj = env->GetObjectField(playerObj, StrayCache::entityPlayer_inventory);
+            JniResolve::ClearException(env);
+            if (invObj) {
+                switchHotbarSlot(env, invObj, m_savedHotbarSlot);
+                env->DeleteLocalRef(invObj);
+            }
+            env->DeleteLocalRef(playerObj);
+        }
         return;
     }
 

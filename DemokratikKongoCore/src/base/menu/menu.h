@@ -33,6 +33,12 @@ struct Menu
     static void SetupImgui();
     static void RenderMenu();              // implemented in renderMenu.cpp
 
+    // Set by Kill() (cheat thread); the actual ImGui/GL teardown runs on the
+    // render thread inside the wglSwapBuffers hook (GL contexts are
+    // thread-affine). Returns true once teardown has been performed.
+    static bool ProcessPendingGLTeardown();
+    static inline std::atomic<bool> PendingGLTeardown{false};
+
     // Pushes / releases Minecraft's dummy GuiScreen so the game stops
     // receiving movement input while our menu is up.
     //

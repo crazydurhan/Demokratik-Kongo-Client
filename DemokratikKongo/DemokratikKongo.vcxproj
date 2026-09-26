@@ -43,13 +43,13 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(ProjectDir)build\</OutDir>
-    <IntDir>$(ProjectDir)build\etc\</IntDir>
+    <IntDir>$(ProjectDir)build\etc\Debug\</IntDir>
     <TargetName>RuntimeHost</TargetName>
     <ApplicationManifest>resources\app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(ProjectDir)build\</OutDir>
-    <IntDir>$(ProjectDir)build\etc\</IntDir>
+    <IntDir>$(ProjectDir)build\etc\Release\</IntDir>
     <TargetName>RuntimeHost</TargetName>
     <ApplicationManifest>resources\app.manifest</ApplicationManifest>
   </PropertyGroup>

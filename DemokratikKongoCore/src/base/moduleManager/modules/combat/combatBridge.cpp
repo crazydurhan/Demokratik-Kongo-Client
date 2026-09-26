@@ -532,7 +532,12 @@ void CombatBridge::AttackEntity(jobject targetEntity)
 
 	jobject player = SDK::Minecraft->GetThePlayerObject();
 	jobject controller = SDK::Minecraft->GetPlayerControllerObject();
-	if (!player || !controller) return;
+	if (!player || !controller)
+	{
+		if (player) env->DeleteLocalRef(player);
+		if (controller) env->DeleteLocalRef(controller);
+		return;
+	}
 
 	// Defensive self-check: never let a self-attack packet leave the client.
 	// Without this the server kicks with "Cannot interact with self" if the

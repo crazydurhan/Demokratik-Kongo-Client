@@ -35,6 +35,17 @@ typedef bool(__stdcall* template_wglSwapBuffers) (HDC hdc);
 template_wglSwapBuffers original_wglSwapBuffers;
 bool __stdcall hook_wglSwapBuffers(_In_ HDC hdc)
 {
+	// Kill() only sets a flag; ImGui/GL teardown must happen here on the
+	// render thread (GL contexts are thread-affine). Capture the trampoline
+	// first — teardown may unhook and null it.
+	template_wglSwapBuffers origSwap = original_wglSwapBuffers;
+	if (Menu::ProcessPendingGLTeardown())
+	{
+		if (origSwap)
+			return origSwap(hdc);
+		return FALSE;
+	}
+
 	if (Base::ShuttingDown.load(std::memory_order_acquire) || !Base::IsRunning())
 	{
 		if (originalClip.right > originalClip.left && originalClip.bottom > originalClip.top)
@@ -320,7 +331,20 @@ void Menu::ResetHookSetupState()
 void Menu::SetupImgui()
 {
 	Menu::MenuGLContext = wglCreateContext(Menu::HandleDeviceContext);
-	wglMakeCurrent(Menu::HandleDeviceContext, Menu::MenuGLContext);
+	if (!Menu::MenuGLContext)
+	{
+		Logger::Error("Menu", "SetupImgui: wglCreateContext failed — overlay disabled this frame");
+		return;
+	}
+	if (!wglMakeCurrent(Menu::HandleDeviceContext, Menu::MenuGLContext))
+	{
+		Logger::Error("Menu", "SetupImgui: wglMakeCurrent failed — overlay disabled this frame");
+		wglDeleteContext(Menu::MenuGLContext);
+		Menu::MenuGLContext = nullptr;
+		// Allow the hook to retry setup on a later frame.
+		g_imguiSetupDone.store(false, std::memory_order_release);
+		return;
+	}
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();

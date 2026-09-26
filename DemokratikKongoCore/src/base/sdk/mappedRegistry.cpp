@@ -27,6 +27,11 @@ namespace
 	std::unordered_map<std::string, std::string> g_notchClass; // mcp path -> notch path
 
 	std::unordered_map<std::string, jclass> g_classCache;
+	// true when the registry itself created the jclass global ref (via NewGlobalRef
+	// or a caller-owned ref from Java::AssignClass) and must DeleteGlobalRef it.
+	// Refs borrowed from AutoMapper::Class / ClassIndex::Find are owned elsewhere
+	// and must not be freed here.
+	std::unordered_map<std::string, bool> g_classCacheOwns;
 	std::unordered_set<std::string> g_failedClasses;
 
 	std::unordered_map<const VapeMapData::Entry*, void*> g_memberCache;
@@ -99,29 +104,52 @@ namespace
 			return nullptr;
 
 		jclass cls = nullptr;
+		bool ownsRef = false;
 		if (AutoMapper::IsReady())
-			cls = AutoMapper::Class(owner.c_str());
+			cls = AutoMapper::Class(owner.c_str()); // borrowed global ref, owned by the mapper
 		if (!cls)
+		{
+			// ClassIndex::Find returns a borrowed ref; take our own.
 			cls = ClassIndex::Find(owner.c_str());
+			if (cls)
+			{
+				cls = static_cast<jclass>(env->NewGlobalRef(cls));
+				ownsRef = true;
+			}
+		}
 		if (!cls)
 		{
 			if (const char* notch = NameSchemeDetect::NotchAlias(owner.c_str()))
+			{
 				cls = ClassIndex::Find(notch);
+				if (cls)
+				{
+					cls = static_cast<jclass>(env->NewGlobalRef(cls));
+					ownsRef = true;
+				}
+			}
 		}
-		if (!cls && !Java::AssignClass(ToDotName(owner.c_str()), cls))
+		if (!cls)
 		{
-			auto alias = g_notchClass.find(owner);
-			if (alias != g_notchClass.end())
-				Java::AssignClass(ToDotName(alias->second.c_str()), cls);
+			if (Java::AssignClass(ToDotName(owner.c_str()), cls))
+				ownsRef = true; // AssignClass already returns a caller-owned global ref
+			else
+			{
+				auto alias = g_notchClass.find(owner);
+				if (alias != g_notchClass.end()
+					&& Java::AssignClass(ToDotName(alias->second.c_str()), cls))
+					ownsRef = true;
+			}
 		}
-		if (cls && g_classCache.find(owner) == g_classCache.end())
-			cls = static_cast<jclass>(env->NewGlobalRef(cls));
 
-		if (cls)
+		if (cls && g_classCache.find(owner) == g_classCache.end())
 		{
 			g_classCache.emplace(owner, cls);
+			g_classCacheOwns.emplace(owner, ownsRef);
 			return cls;
 		}
+		if (cls && !ownsRef)
+			return cls; // borrowed: cache entry owns it, just reuse
 		g_failedClasses.insert(owner);
 		return nullptr;
 	}
@@ -280,11 +308,6 @@ namespace
 							result = env->GetFieldID(cls, n.c_str(), sig.c_str());
 							if (env->ExceptionCheck()) { env->ExceptionClear(); result = nullptr; }
 						}
-						if (!result && e->isStatic)
-						{
-							result = env->GetStaticFieldID(cls, n.c_str(), sig.c_str());
-							if (env->ExceptionCheck()) { env->ExceptionClear(); result = nullptr; }
-						}
 					}
 					else // method or ctor
 					{
@@ -392,10 +415,14 @@ void MappedRegistry::Shutdown()
 	if (env)
 	{
 		for (auto& pair : g_classCache)
-			if (pair.second)
+		{
+			auto ownIt = g_classCacheOwns.find(pair.first);
+			if (pair.second && ownIt != g_classCacheOwns.end() && ownIt->second)
 				env->DeleteGlobalRef(pair.second);
+		}
 	}
 	g_classCache.clear();
+	g_classCacheOwns.clear();
 	g_failedClasses.clear();
 	g_memberCache.clear();
 	g_failedMembers.clear();

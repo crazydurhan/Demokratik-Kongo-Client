@@ -62,6 +62,7 @@
 
 #include <Windows.h>
 #include <chrono>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -69,6 +70,12 @@
 namespace
 {
 	std::atomic<bool> g_commonDataUpdated{ false };
+	// Guards storage() mutations (Init/Kill) and dispatch iteration: storage is
+	// built/cleared on the cheat thread while render/tick/wndProc threads
+	// iterate it. All()/Get() stay lock-free (they only read raw pointers and
+	// are called from inside dispatched module code — locking there would
+	// deadlock); they are safe as long as no clear() runs concurrently.
+	std::mutex g_modulesMutex;
 }
 
 bool CommonData::DataUpdated() { return g_commonDataUpdated.load(std::memory_order_acquire); }
@@ -155,6 +162,7 @@ namespace
 
 void ModuleManager::Init()
 {
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     auto& m = storage();
     m.clear();
 
@@ -230,6 +238,7 @@ void ModuleManager::Init()
 
 void ModuleManager::Kill()
 {
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
         if (mod->isEnabled()) mod->setEnabled(false);
     storage().clear();
@@ -278,6 +287,9 @@ void ModuleManager::RunModuleTicks()
 	if (!StrayCache::IsReady())
 		return;
 
+	// Hold the storage lock during dispatch (see g_modulesMutex note).
+	std::lock_guard<std::mutex> lock(g_modulesMutex);
+
 	if (!runCombatTargetingGuarded())
 	{
 		static long long s_lastTargetWarnMs = 0;
@@ -313,6 +325,8 @@ void ModuleManager::UpdateModules()
 
 void ModuleManager::OnRender2D()
 {
+    // Hold the storage lock during dispatch (see g_modulesMutex note).
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
         if (!mod->toggleable() || mod->isEnabled())
             mod->onRender2D();
@@ -328,6 +342,8 @@ void ModuleManager::OnRender3D(float partialTicks)
     // overflow the reference table within seconds; the frame bounds the leak.
     JniResolve::LocalFrame frame(Java::GetEnv(), 128);
 
+    // Hold the storage lock during dispatch (see g_modulesMutex note).
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
         if (mod->isEnabled()) mod->onRender3D(partialTicks);
 }
@@ -344,6 +360,10 @@ void ModuleManager::OnRunTickPre()
     // Also reachable from the per-frame getMouseOver hook, so bound the locals
     // created by the client-tick helpers below.
     JniResolve::LocalFrame frame(Java::GetEnv(), 128);
+
+    // Hold the storage lock: the Get<T>() lookups below iterate the module
+    // vector while the cheat thread may rebuild it (see g_modulesMutex note).
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
 
     Patcher::NoteRunTickPre();
 
@@ -388,6 +408,8 @@ void ModuleManager::OnRunTickPre()
 void ModuleManager::OnKey(int vk, bool down, LPARAM lParam)
 {
     if (!down) return;
+    // Hold the storage lock during iteration (see g_modulesMutex note).
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
         if (mod->toggleable()
             && KeybindUtil::KeybindMatches(mod->keybind().virtualKey, vk, lParam))
@@ -404,6 +426,7 @@ const std::vector<std::unique_ptr<Module>>& ModuleManager::All()
 std::vector<Module*> ModuleManager::ByCategory(Category c)
 {
     std::vector<Module*> out;
+    std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
         if (mod->category() == c && mod->showInMenu())
             out.push_back(mod.get());

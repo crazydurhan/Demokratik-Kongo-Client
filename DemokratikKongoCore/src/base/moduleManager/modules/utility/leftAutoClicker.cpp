@@ -181,6 +181,7 @@ int LeftAutoClicker::getRealCPS() const
 {
     long long now = nowMs();
     int count = 0;
+    std::lock_guard<std::mutex> lock(m_cpsMutex);
     for (int i = 0; i < m_cpsCount; ++i)
         if (now - m_cpsTimestamps[i] < 1000)
             ++count;
@@ -315,8 +316,11 @@ void LeftAutoClicker::onDisable()
 {
     stopThread();
     m_nextClickUs = 0;
-    m_cpsCount = 0;
-    memset(m_cpsTimestamps, 0, sizeof(m_cpsTimestamps));
+    {
+        std::lock_guard<std::mutex> lock(m_cpsMutex);
+        m_cpsCount = 0;
+        memset(m_cpsTimestamps, 0, sizeof(m_cpsTimestamps));
+    }
 }
 
 void LeftAutoClicker::stopThread()
@@ -405,12 +409,15 @@ void LeftAutoClicker::threadMain()
 
                 clicked = true;
                 const long long nowMsVal = nowMs();
-                if (m_cpsCount < 60)
-                    m_cpsTimestamps[m_cpsCount++] = nowMsVal;
-                else
                 {
-                    memmove(m_cpsTimestamps, m_cpsTimestamps + 1, 59 * sizeof(long long));
-                    m_cpsTimestamps[59] = nowMsVal;
+                    std::lock_guard<std::mutex> lock(m_cpsMutex);
+                    if (m_cpsCount < 60)
+                        m_cpsTimestamps[m_cpsCount++] = nowMsVal;
+                    else
+                    {
+                        memmove(m_cpsTimestamps, m_cpsTimestamps + 1, 59 * sizeof(long long));
+                        m_cpsTimestamps[59] = nowMsVal;
+                    }
                 }
 
                 if (m_clickPattern->index == 1 && !invClickActive) // Butterfly

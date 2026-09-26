@@ -152,7 +152,8 @@ bool isModuleLoadedInProcess(DWORD pid, const std::wstring& dllPath)
 
 bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllPath,
                                void* remotePath, LPTHREAD_START_ROUTINE loadLib,
-                               InjectionResult& r, DWORD& moduleHandle)
+                               InjectionResult& r, DWORD& moduleHandle,
+                               bool& keepRemoteMem)
 {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     auto ntCreateThreadEx = reinterpret_cast<NtCreateThreadExFn>(
@@ -174,10 +175,15 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
         0, 0, 0, nullptr);
 
     if (status != 0 || !hThread) {
+        // NtCreateThreadEx can fail after partially creating the thread
+        // object; close the handle so it doesn't leak.
+        if (hThread)
+            CloseHandle(hThread);
+        const DWORD ntErr = GetLastError();
         std::ostringstream oss;
         oss << "NtCreateThreadEx failed (NTSTATUS 0x" << std::hex << std::uppercase
             << static_cast<unsigned long>(status) << ").";
-        fail(r, InjectStep::NtCreateThreadEx, oss.str(), GetLastError());
+        fail(r, InjectStep::NtCreateThreadEx, oss.str(), ntErr);
         return false;
     }
     pass(r, InjectStep::NtCreateThreadEx, "remote thread created (hide-from-debugger)");
@@ -185,8 +191,13 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
     const DWORD wait = WaitForSingleObject(hThread, kInjectWaitMs);
     if (wait != WAIT_OBJECT_0) {
         const char* waitName = wait == WAIT_TIMEOUT ? "WAIT_TIMEOUT (30s)" : "unexpected";
+        const DWORD waitErr = GetLastError();
+        // The remote thread may still be executing LoadLibraryW on the
+        // remote buffer — freeing it now would be a use-after-free inside
+        // the target. Leak the page deliberately instead.
+        keepRemoteMem = true;
         fail(r, InjectStep::WaitRemoteThread,
-             std::string("Remote thread did not complete: ") + waitName, GetLastError());
+             std::string("Remote thread did not complete: ") + waitName, waitErr);
         CloseHandle(hThread);
         return false;
     }
@@ -195,6 +206,10 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
     GetExitCodeThread(hThread, &exitCode);
     CloseHandle(hThread);
 
+    // LoadLibraryW returns a full HMODULE (64-bit on x64) but the thread
+    // exit code is only 32 bits, so this value is truncated and can never
+    // be used as a real handle. It is heuristic only — actual verification
+    // is done by isPayloadLoaded()/EnumProcessModulesEx below.
     moduleHandle = exitCode;
     if (exitCode == 0)
         return false;
@@ -202,7 +217,8 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
     r.injectMethod = "nt-create-thread-ex";
     {
         std::ostringstream oss;
-        oss << "module handle 0x" << std::hex << exitCode;
+        oss << "thread exit code 0x" << std::hex << exitCode
+            << " (truncated 32-bit of LoadLibraryW HMODULE — heuristic only)";
         pass(r, InjectStep::WaitRemoteThread, oss.str());
     }
     return true;
@@ -210,16 +226,22 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
 
 } // namespace
 
-InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
+InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectProgressFn progress)
 {
     InjectionResult r;
     auto& log = LauncherLog::I();
+
+    auto report = [&](int step, const char* label) {
+        if (progress)
+            progress(step, 9, label);
+    };
 
     log.separator();
     log.info("Starting injection into PID " + std::to_string(pid));
 
     // ── Step 1: Validate payload ─────────────────────────────────────
     {
+        report(1, "Validating payload");
         r.failedStep = InjectStep::ValidatePayload;
         PayloadDiagnostics diag = diagnosePayload(dllPath);
         logPayloadDiagnostics(diag);
@@ -247,6 +269,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     }
 
     // ── Step 2: OpenProcess ──────────────────────────────────────────
+    report(2, "Opening process");
     const DWORD access =
         PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
         PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
@@ -262,6 +285,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
 
     // ── Step 3: Architecture check ───────────────────────────────────
     {
+        report(3, "Checking architecture");
         std::string archErr, archDetail;
         if (!sameArchAsTarget(hProc, archErr, archDetail)) {
             fail(r, InjectStep::ArchCheck, archErr);
@@ -273,6 +297,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     }
 
     // ── Step 4: VirtualAllocEx ───────────────────────────────────────
+    report(4, "Allocating remote memory");
     const SIZE_T pathBytes = (dllPath.size() + 1) * sizeof(wchar_t);
     void* remoteMem = VirtualAllocEx(hProc, nullptr, pathBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!remoteMem) {
@@ -288,6 +313,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     }
 
     // ── Step 5: WriteProcessMemory ───────────────────────────────────
+    report(5, "Writing DLL path");
     if (!WriteProcessMemory(hProc, remoteMem, dllPath.c_str(), pathBytes, nullptr)) {
         fail(r, InjectStep::WriteProcessMemory, "WriteProcessMemory failed.", GetLastError());
         VirtualFreeEx(hProc, remoteMem, 0, MEM_RELEASE);
@@ -297,6 +323,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     pass(r, InjectStep::WriteProcessMemory, wideToUtf8(dllPath));
 
     // ── Step 6: Resolve LoadLibraryW ─────────────────────────────────
+    report(6, "Resolving LoadLibraryW");
     HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
     auto loadLib = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetProcAddress(k32, "LoadLibraryW"));
     if (!loadLib) {
@@ -316,10 +343,14 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     // redirecting its RIP is inherently unsafe (stack misalignment for x64
     // WinAPI calls, loader-lock races, GC safepoint corruption) and was the
     // root cause of the 0xC0000005 crash in ntdll.dll on injection.
+    report(7, "Creating remote thread");
     DWORD moduleHandle = 0;
-    bool loaded = injectViaNtCreateThreadEx(hProc, pid, dllPath, remoteMem, loadLib, r, moduleHandle);
+    bool keepRemoteMem = false;
+    bool loaded = injectViaNtCreateThreadEx(hProc, pid, dllPath, remoteMem, loadLib, r, moduleHandle,
+                                            keepRemoteMem);
 
-    VirtualFreeEx(hProc, remoteMem, 0, MEM_RELEASE);
+    if (!keepRemoteMem)
+        VirtualFreeEx(hProc, remoteMem, 0, MEM_RELEASE);
 
     if (!loaded) {
         r.failedStep = InjectStep::WaitRemoteThread;
@@ -353,9 +384,14 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
     r.remoteModuleHandle = moduleHandle;
 
     // ── Step 8: Verify module in target ──────────────────────────────
+    report(8, "Verifying module");
     if (!isPayloadLoaded(pid, dllPath)) {
         fail(r, InjectStep::VerifyModule,
              "LoadLibraryW succeeded but module not found in target module list.");
+        log.error("CONFIRMED LOADED: LoadLibraryW returned a non-zero module handle — the payload DLL "
+                  "REMAINS LOADED in the target process even though it was not found via "
+                  "EnumProcessModulesEx. The DLL is NOT unloaded; a restart of the target is required "
+                  "to clear it.");
         log.warn("The DLL may have loaded then immediately unloaded (DllMain failure).");
         CloseHandle(hProc);
         return r;
@@ -364,6 +400,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath)
 
     CloseHandle(hProc);
     r.ok = true;
+    report(9, "Done");
     r.message = std::string("Injection complete via ") +
                 (r.injectMethod ? r.injectMethod : "unknown") +
                 " — payload verified in target process.";

@@ -1,4 +1,4 @@
-# DemokratikKongo - build Release|x64
+﻿# DemokratikKongo - build Release|x64
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $Sln = Join-Path $Root "DemokratikKongo.sln"
@@ -7,11 +7,19 @@ if (-not (Test-Path $Sln)) {
     Write-Error "Solution not found: $Sln"
 }
 
-$msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-    -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" |
-    Select-Object -First 1
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$msbuild = $null
+try {
+    if (Test-Path $vswhere) {
+        $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" |
+            Select-Object -First 1
+    }
+} catch {
+    Write-Warning "vswhere invocation failed: $_"
+}
 
 if (-not $msbuild) {
+    Write-Host "vswhere unavailable/empty — falling back to msbuild on PATH."
     $msbuild = "msbuild"
 }
 
@@ -36,8 +44,16 @@ if (-not (Test-Path $srcDll)) {
     Write-Error "Core DLL not found: $srcDll"
 }
 
-Copy-Item $srcExe $releaseExe -Force
-Copy-Item $srcDll $releaseDll -Force
+try {
+    Copy-Item $srcExe $releaseExe -Force
+} catch {
+    Write-Warning "Could not copy launcher EXE to release\ (file locked?)."
+}
+try {
+    Copy-Item $srcDll $releaseDll -Force
+} catch {
+    Write-Warning "Could not copy core DLL to release\ (file locked?)."
+}
 try {
     Copy-Item $srcExe $dstExe -Force
 } catch {

@@ -292,8 +292,19 @@ bool ProfileManager::load(const std::string& name)
             size_t p = doc.find("\"friendsMiddleClick\"");
             if (p != std::string::npos) {
                 size_t c = doc.find(':', p);
-                if (c != std::string::npos)
-                    Friends::MiddleClick = (doc.substr(c + 1).find("true") != std::string::npos);
+                if (c != std::string::npos) {
+                    // Parse only the single value token after the key — the
+                    // old doc.substr(c+1).find("true") scanned the rest of the
+                    // document and matched "true" from any later field.
+                    size_t v = c + 1;
+                    while (v < doc.size() && (doc[v] == ' ' || doc[v] == '\t')) ++v;
+                    size_t e = v;
+                    while (e < doc.size() && doc[e] != ',' && doc[e] != '}' &&
+                           doc[e] != '\n' && doc[e] != '\r') ++e;
+                    std::string tok = doc.substr(v, e - v);
+                    while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
+                    Friends::MiddleClick = (tok == "true" || tok == "1");
+                }
             }
         }
     }

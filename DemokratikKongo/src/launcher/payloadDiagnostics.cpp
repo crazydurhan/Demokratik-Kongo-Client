@@ -92,13 +92,22 @@ PayloadDiagnostics diagnosePayload(const std::wstring& dllPath)
 
     d.readable = true;
     LARGE_INTEGER sz{};
-    if (GetFileSizeEx(h, &sz) && sz.QuadPart >= 0 && sz.QuadPart <= 0xFFFFFFFFu)
+    bool sizeKnown = false;
+    if (GetFileSizeEx(h, &sz) && sz.QuadPart >= 0 && sz.QuadPart <= 0xFFFFFFFFu) {
         d.fileSize = static_cast<DWORD>(sz.QuadPart);
+        sizeKnown = true;
+    }
 
     std::string peErr;
-    d.peValid = validatePeHeaders(h, d.fileSize, peErr);
-    if (!d.peValid)
-        d.peErrorText = peErr;
+    if (!sizeKnown) {
+        // GetFileSizeEx failed — do not report this as "too small for PE".
+        d.peValid = false;
+        d.peErrorText = "Cannot read file (GetFileSizeEx failed: " + lastErrorString() + ")";
+    } else {
+        d.peValid = validatePeHeaders(h, d.fileSize, peErr);
+        if (!d.peValid)
+            d.peErrorText = peErr;
+    }
 
     CloseHandle(h);
     return d;

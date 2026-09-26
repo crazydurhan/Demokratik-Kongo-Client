@@ -5,7 +5,7 @@
 
 namespace dk {
 
-// Resolve inject payload: sibling DemokratikKongoCore.dll if present, else embedded -> TEMP cache.
+// Resolve inject payload: sibling RuntimeHostCore.dll if present, else embedded -> TEMP cache.
 std::wstring ensureEmbeddedPayload();
 
 // Force re-extract from embedded resource (e.g. after AV quarantine).

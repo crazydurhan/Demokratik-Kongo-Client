@@ -8,6 +8,7 @@
 
 #include <thread>
 #include <chrono>
+#include <Windows.h>
 
 JavaVM* vm;
 jobject classLoader;
@@ -229,7 +230,7 @@ JNIEnv* Java::GetEnv()
 			if (vm->AttachCurrentThread((void**)&env, nullptr) == JNI_OK)
 			{
 				std::lock_guard<std::mutex> lock(attachedThreadsMutex);
-				attachedThreads.insert(vm);
+				attachedThreads.insert(GetCurrentThreadId());
 			}
 		}
 	}
@@ -286,10 +287,12 @@ void Java::Kill()
 
 	{
 		std::lock_guard<std::mutex> lock(attachedThreadsMutex);
-		if (attachedThreads.count(vm))
+		// Attach is per-thread: only detach THIS thread if GetEnv() attached it
+		// here. Other attached threads detach themselves.
+		if (attachedThreads.count(GetCurrentThreadId()))
 		{
 			vm->DetachCurrentThread();
-			attachedThreads.erase(vm);
+			attachedThreads.erase(GetCurrentThreadId());
 		}
 	}
 }

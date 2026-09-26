@@ -250,8 +250,15 @@ bool ProcessScanner::inspectProcess(DWORD pid, const std::wstring& snapExe,
     const bool javaHost = isJvmHostProcess(out.exeName) || isJavaRuntimeDescription(fileDesc);
 
     BOOL isWow64 = FALSE;
-    IsWow64Process(h, &isWow64);
-    out.x64 = !isWow64;
+    if (IsWow64Process(h, &isWow64)) {
+        out.x64 = !isWow64;
+    } else {
+        // Could not determine bitness — do not silently default to x64.
+        out.x64Unknown = true;
+        out.x64 = false;
+        LauncherLog::I().debug("PID " + std::to_string(pid) +
+                               ": IsWow64Process failed — bitness unknown (" + lastErrorString() + ")");
+    }
 
     HMODULE mods[1024];
     DWORD needed = 0;

@@ -58,6 +58,18 @@ void Menu::Kill()
 
     Gui::Shutdown();
 
+    // GL contexts are thread-affine: ImGui_ImplOpenGL2_Shutdown and
+    // wglDeleteContext must run on the render thread (where the context is
+    // current), not here on the cheat thread. Request the teardown and let
+    // the wglSwapBuffers hook perform it on the next frame.
+    Menu::PendingGLTeardown.store(true, std::memory_order_release);
+}
+
+bool Menu::ProcessPendingGLTeardown()
+{
+    if (!Menu::PendingGLTeardown.exchange(false, std::memory_order_acq_rel))
+        return false;
+
     if (Menu::Initialized && Menu::CurrentImGuiContext)
     {
         ImGui::SetCurrentContext(Menu::CurrentImGuiContext);
@@ -69,13 +81,17 @@ void Menu::Kill()
 
     if (Menu::MenuGLContext && Menu::HandleDeviceContext)
     {
-        wglMakeCurrent(Menu::HandleDeviceContext, Menu::OriginalGLContext);
+        wglMakeCurrent(Menu::HandleDeviceContext, Menu::MenuGLContext);
         wglDeleteContext(Menu::MenuGLContext);
         Menu::MenuGLContext = nullptr;
+        wglMakeCurrent(Menu::HandleDeviceContext, Menu::OriginalGLContext);
     }
 
     Menu::Initialized = false;
     Menu::ResetHookSetupState();
+    // Teardown done — now safe to drop the render hook we kept alive for this.
+    Menu::Unhook_wglSwapBuffers();
+    return true;
 }
 
 void Menu::PlaceHooks()
@@ -86,5 +102,11 @@ void Menu::PlaceHooks()
 void Menu::RemoveHooks()
 {
     Menu::Unhook_wndProc();
+    if (Menu::PendingGLTeardown.load(std::memory_order_acquire))
+    {
+        // Keep the wglSwapBuffers hook alive one more frame so the render
+        // thread can perform the pending GL teardown; it unhooks afterwards.
+        return;
+    }
     Menu::Unhook_wglSwapBuffers();
 }
