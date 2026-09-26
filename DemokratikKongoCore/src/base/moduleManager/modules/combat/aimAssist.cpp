@@ -601,7 +601,26 @@ void AimAssist::applyRotation(float yaw, float pitch)
     CEntityPlayerSP* local = SDK::Minecraft ? SDK::Minecraft->thePlayer : nullptr;
     if (!local)
         return;
-    local->SetAngles(Vector2{ yaw, pitch });
+
+    // RotationUtils#fixRotation: snap the rotation delta onto the vanilla
+    // mouse GCD grid so anticheats comparing consecutive deltas ("GCD is
+    // incorrect") can't flag the rotations as impossible.
+    const Vector2 current = local->GetAngles();
+    float sens = 0.5f;
+    if (SDK::Minecraft->gameSettings)
+        sens = SDK::Minecraft->gameSettings->GetMouseSensitivity();
+
+    const float f = sens * 0.6f + 0.2f;
+    const float gcd = f * f * f * 8.0f;
+    if (gcd > 1e-6f)
+    {
+        const float yawDelta = wrapTo180(yaw - current.x);
+        yaw = current.x + std::round(yawDelta / gcd) * gcd;
+        pitch = current.y + std::round((pitch - current.y) / gcd) * gcd;
+    }
+
+    pitch = clampd(pitch, -90.0f, 90.0f);
+    local->SetAngles(Vector2{ Math::wrapAngleTo180(yaw), pitch });
 }
 
 void AimAssist::onEnable()
