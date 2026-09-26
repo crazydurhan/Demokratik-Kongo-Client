@@ -54,6 +54,14 @@ std::string FastPlace::arrayListSuffix(SuffixDetail detail) const
 
 void FastPlace::onDisable()
 {
+    // If we reduced the placement delay, restore the vanilla 4-tick timer so
+    // placement doesn't stay stuck faster than vanilla after the module turns off.
+    if (SDK::Minecraft && SDK::Minecraft->IsReady() && StrayCache::minecraft_rightClickDelayTimer)
+    {
+        const int current = SDK::Minecraft->GetRightClickDelayTimer();
+        if (current >= 0 && current < 4)
+            SDK::Minecraft->SetRightClickDelayTimer(4);
+    }
 }
 
 bool FastPlace::isRightMouseActive() const

@@ -1918,6 +1918,11 @@ namespace Patcher
 			jstring v = env->NewStringUTF(value.c_str());
 			jobject rs = env->CallObjectMethod(EMPTY_MAP, mapPutMethodID, k, v);
 
+			// Clear any pending exception before touching more JNI state;
+			// leaving one pending corrupts subsequent calls on this thread.
+			if (env->ExceptionCheck())
+				env->ExceptionClear();
+
 			env->DeleteLocalRef(k);
 			env->DeleteLocalRef(v);
 			if (rs) env->DeleteLocalRef(rs);

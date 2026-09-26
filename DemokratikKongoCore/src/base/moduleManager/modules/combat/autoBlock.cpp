@@ -219,8 +219,10 @@ void AutoBlock::onTick()
 
     if (!targetInRange)
     {
-        if (m_isBlocking && !m_isLagging)
+        if (m_isLagging || m_isBlocking)
         {
+            // Target left range: don't let the lag/block state machine stick.
+            m_isLagging = false;
             resetBlockState();
         }
         env->DeleteLocalRef(player);

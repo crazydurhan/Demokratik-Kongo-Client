@@ -1,5 +1,6 @@
 #pragma once
 
+#include <windows.h>
 #include <string>
 #include <set>
 #include <mutex>
@@ -29,8 +30,9 @@ struct Java
 	static inline bool Initialized;
 
 private:
-	// Track threads attached by GetEnv() for proper cleanup
+	// Threads attached by GetEnv() for proper cleanup (attach is per-THREAD:
+	// each attached thread must detach itself; Kill only detaches the caller).
 	static inline std::mutex attachedThreadsMutex;
-	static inline std::set<JavaVM*> attachedThreads;
+	static inline std::set<DWORD> attachedThreads;
 };
 

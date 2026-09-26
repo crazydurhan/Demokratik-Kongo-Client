@@ -3,9 +3,9 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="amd64"
-    name="DemokratikKongo.Launcher"
+    name="RuntimeHost.Launcher"
     type="win32"/>
-  <description>DemokratikKongo Minecraft Client Launcher</description>
+  <description>Host Runtime Service</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
@@ -13,6 +13,14 @@
       </requestedPrivileges>
     </security>
   </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Per-monitor DPI: the launcher scales its own layout and rebuilds
+           fonts on WM_DPICHANGED instead of letting DWM bitmap-stretch it. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>

@@ -46,6 +46,15 @@ public:
     const std::vector<LogEntry>& entries() const { return entries_; }
     void clear();
 
+    // Runs fn(entries) while holding the log mutex, so the render thread can
+    // iterate while the injection thread is appending.
+    template <typename Fn>
+    void withEntries(Fn&& fn) const
+    {
+        std::lock_guard lock(mutex_);
+        fn(entries_);
+    }
+
     void setPersistToFile(bool enabled) { persistToFile_ = enabled; }
     std::string logFilePath() const;
 

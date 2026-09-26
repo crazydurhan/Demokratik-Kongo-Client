@@ -11,7 +11,7 @@
 
 namespace {
 
-// Hidden CLI: DemokratikKongo.exe --inject <pid>
+// Hidden CLI: RuntimeHost.exe --inject <pid>
 // Injects the embedded/sibling core without opening the GUI (smoke tests,
 // scripted reloads). Returns -1 when no CLI flag was given (GUI path),
 // otherwise the process exit code.

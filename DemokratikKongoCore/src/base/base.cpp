@@ -239,14 +239,15 @@ void Base::Init()
 	while (Base::IsRunning())
 	{
 		JNIEnv* env = Java::Env;
+		bool framePushed = false;
 		if (env)
 		{
-			env->PushLocalFrame(512);
+			framePushed = (env->PushLocalFrame(512) == 0);
 		}
 
 		bool ok = RunCheatTickGuarded();
 
-		if (env)
+		if (env && framePushed)
 		{
 			env->PopLocalFrame(nullptr);
 		}

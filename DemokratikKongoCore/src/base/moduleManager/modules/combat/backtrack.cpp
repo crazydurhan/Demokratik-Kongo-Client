@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <random>
 #include <string>
 
 namespace
@@ -163,7 +164,11 @@ long long Backtrack::rollSessionMs() const
     const int lo = m_delay->getLow();
     const int hi = m_delay->getHigh();
     const int span = hi - lo;
-    return static_cast<long long>(lo + (span <= 0 ? 0 : std::rand() % (span + 1)));
+    if (span <= 0)
+        return static_cast<long long>(lo);
+    static thread_local std::mt19937 gen{ std::random_device{}() };
+    std::uniform_int_distribution<int> dist(lo, hi);
+    return static_cast<long long>(dist(gen));
 }
 
 void Backtrack::endSession(long long now, bool startCooldown)

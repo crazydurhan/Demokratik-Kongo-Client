@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -32,9 +33,11 @@ struct InjectionResult {
 
 const char* injectStepName(InjectStep step);
 
+using InjectProgressFn = std::function<void(int step, int total, const char* label)>;
+
 class Injector {
 public:
-    InjectionResult inject(DWORD pid, const std::wstring& dllPath);
+    InjectionResult inject(DWORD pid, const std::wstring& dllPath, InjectProgressFn progress = nullptr);
     bool isPayloadLoaded(DWORD pid, const std::wstring& dllPath);
 };
 

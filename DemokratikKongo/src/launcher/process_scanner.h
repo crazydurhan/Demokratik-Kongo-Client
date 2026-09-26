@@ -26,6 +26,7 @@ struct McProcess {
     bool hasLwjgl = false;
     LauncherKind launcher = LauncherKind::Unknown;
     bool x64 = true;
+    bool x64Unknown = false; // IsWow64Process failed — bitness not determined
 };
 
 class ProcessScanner {

@@ -1,0 +1,47 @@
+# Normalize line endings in the repo; check out native on Windows.
+* text=auto
+
+# Explicit text types.
+*.c        text
+*.cpp      text
+*.h        text
+*.hpp      text
+*.inl      text
+*.md       text
+*.ps1      text eol=crlf
+*.rc       text
+*.manifest text
+*.props    text eol=crlf
+*.vcxproj  text eol=crlf
+*.filters  text eol=crlf
+*.sln      text eol=crlf
+*.yml      text
+*.json     text
+
+# Binary — never diff or line-ending-convert.
+*.dll  binary
+*.exe  binary
+*.lib  binary
+*.pdb  binary
+*.jar  binary
+*.png  binary
+*.ttf  binary
+*.ico  binary
+
+# Vendored third-party code. Excluded from GitHub's language stats and from
+# diffs so the reported language breakdown reflects first-party source only.
+*/ext/**            linguist-vendored
+DemokratikKongoCore/ext/**  linguist-vendored
+injector/ext/**             linguist-vendored
+# Embedded font byte arrays shared by both binaries.
+include/fonts/**            linguist-vendored
+
+# Generated, frozen mapping table (see AGENTS.md) — do not hand-edit, and keep
+# it out of diffs and language stats.
+DemokratikKongoCore/src/base/sdk/gen/vapeMappingData.cpp linguist-generated
+DemokratikKongoCore/src/base/sdk/gen/vapeMappingData.h   linguist-generated
+
+# Embedded payload blob and vendored miniz are not hand-written source.
+DemokratikKongoCore/src/base/patcher/data.h  linguist-generated
+DemokratikKongoCore/src/base/patcher/miniz.c linguist-vendored
+DemokratikKongoCore/src/base/patcher/miniz.h linguist-vendored

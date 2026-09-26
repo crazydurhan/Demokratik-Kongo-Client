@@ -232,6 +232,7 @@ float Fullbright::readBlockLight()
     if (!player || !world)
     {
         if (player) env->DeleteLocalRef(player);
+        if (world) env->DeleteLocalRef(world);
         return 8.0f;
     }
 
@@ -273,12 +274,12 @@ void Fullbright::applyNightVision(bool enable)
 
     PotionCache& p = potions();
 
+    static jmethodID getId = nullptr;
+    if (!getId)
+        getId = JniResolve::Method(env, p.potionClass, "()I", "getId");
+
     if (enable)
     {
-        static jmethodID getId = nullptr;
-        if (!getId)
-            getId = JniResolve::Method(env, p.potionClass, "()I", "getId");
-
         jint id = 16;
         jobject potion = env->GetStaticObjectField(p.potionClass, p.nightVisionId);
         if (potion && getId)
@@ -309,9 +310,18 @@ void Fullbright::applyNightVision(bool enable)
     }
     else
     {
+        jint id = 16;
+        jobject potion = env->GetStaticObjectField(p.potionClass, p.nightVisionId);
+        if (potion && getId)
+        {
+            id = env->CallIntMethod(potion, getId);
+            JniResolve::ClearException(env);
+            env->DeleteLocalRef(potion);
+        }
+
         if (p.removePotion)
         {
-            env->CallVoidMethod(player, p.removePotion, 16);
+            env->CallVoidMethod(player, p.removePotion, id);
             JniResolve::ClearException(env);
         }
         m_nvActive = false;

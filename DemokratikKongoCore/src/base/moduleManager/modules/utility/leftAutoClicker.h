@@ -4,6 +4,7 @@
 #include "../../../java/java.h"
 
 #include <atomic>
+#include <mutex>
 #include <thread>
 
 /*
@@ -52,6 +53,7 @@ private:
     BoolSetting*   m_notUsingItem = nullptr;
 
     long long m_nextClickUs            = 0;   // QPC microseconds
+    mutable std::mutex m_cpsMutex;            // guards m_cpsTimestamps/m_cpsCount (clicker thread <-> render thread)
     long long m_cpsTimestamps[60]      = { 0 };
     int       m_cpsCount               = 0;
 

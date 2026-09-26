@@ -97,7 +97,7 @@ bool AntiBot::IsBot(const std::string& name)
 
 bool AntiBot::IsBotEntity(jobject entityObj)
 {
-    if (!entityObj) return true;
+    if (!entityObj) return false; // unknown entity != bot
 
     JNIEnv* env = Java::GetEnv();
     if (!env) return false;
