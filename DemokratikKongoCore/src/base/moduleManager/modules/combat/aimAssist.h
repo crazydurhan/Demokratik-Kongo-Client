@@ -5,6 +5,14 @@
 
 #include <string>
 
+// Aim Assist — port of raven-bS's AimAssist (Normal mode).
+// Settings and rotation math mirror Raven's AimAssist + RotationHelper +
+// RotationUtils (multipoint aim point, backup face grid, smoothRotation with
+// randomization and proximity slowdown, FOV gate, sort modes).
+// Deliberately omitted (no infrastructure in this client):
+//   - Silent mode / Keep move direction (requires server-rotation system)
+//   - Hurt time sort (PlayerSnapshot has no hurtTime)
+//   - Ignore teammates (no scoreboard team API)
 class AimAssist : public Module
 {
 public:
@@ -17,59 +25,48 @@ public:
     std::string arrayListSuffix(SuffixDetail detail) const override;
 
 private:
-    struct TargetInfo;
+    struct AimTarget
+    {
+        CommonData::PlayerSnapshot player;
+        Vector3 aimPoint{};
+        float distanceSq = 0.0f;
+        float yawDelta = 0.0f;
+        float pitchDelta = 0.0f;
+        std::string name;
+    };
 
-    bool isLeftMouseHeld() const;
+    bool conditionsMet();
     bool passesItemFilter() const;
     bool isBreakingAllowedBlock() const;
-    bool isStrafing(const TargetInfo& target) const;
-    bool isTargetVisible(const Vector3& eyes, const Vector3& aimPoint) const;
 
-    bool findTarget(TargetInfo& outTarget);
-    bool findLockedTarget(TargetInfo& outTarget) const;
-    bool buildTarget(const CommonData::PlayerSnapshot& pd, TargetInfo& outTarget) const;
+    bool getEnemy(AimTarget& out);
+    bool candidatePassesDistance(const CommonData::PlayerSnapshot& pd, float range) const;
 
-    float scoreTarget(const TargetInfo& target) const;
+    Vector3 getAimPoint(const CommonData::PlayerSnapshot& pd, const BoundingBox& box) const;
+    bool mainRayHitsTargetAabb(const Vector3& eye, const Vector3& point, const BoundingBox& targetBox, float range) const;
+    std::vector<Vector3> buildBackupPoints(const BoundingBox& box, const Vector3& eye) const;
+
+    bool findRotations(const CommonData::PlayerSnapshot& pd, float& outYaw, float& outPitch);
+    void applyRotation(float yaw, float pitch);
 
     void tickAim();
-    void applyAim(const TargetInfo& target);
-    void clearLock();
 
-    EnumSetting*   m_mode = nullptr;
-    BoolSetting*   m_requireMouseDown = nullptr;
-    BoolSetting*   m_targetLock = nullptr;
-    NumberSetting* m_strafeIncrease = nullptr;
-    BoolSetting*   m_checkBlockBreak = nullptr;
-    StringSetting* m_breakBlocksWhitelist = nullptr;
+    EnumSetting*   m_sortMode = nullptr;      // Health / Angle / Distance
+    NumberSetting* m_speed = nullptr;         // 1-30, raven smoothing speed
+    NumberSetting* m_multipointH = nullptr;   // 0-100 %
+    NumberSetting* m_multipointV = nullptr;   // 0-100 %
+    NumberSetting* m_randomization = nullptr; // 0-100 %
+    NumberSetting* m_fov = nullptr;           // 15-360 deg
+    NumberSetting* m_range = nullptr;         // 0-5 blocks
 
-    BoolSetting*   m_aimVertically = nullptr;
-    NumberSetting* m_verticalSpeed = nullptr;
-    NumberSetting* m_horizontalSpeed = nullptr;
+    BoolSetting*   m_aimInvis = nullptr;
+    BoolSetting*   m_clickAim = nullptr;      // "Require mouse"
+    BoolSetting*   m_ignoreBehindWalls = nullptr;
+    BoolSetting*   m_ignoreBehindEntities = nullptr;
+    BoolSetting*   m_stopWhenBreaking = nullptr;
+    NumberSetting* m_hoverDelay = nullptr;    // ms, visible with stopWhenBreaking
+    BoolSetting*   m_weaponOnly = nullptr;
 
-    NumberSetting* m_maxAngle = nullptr;
-    NumberSetting* m_distance = nullptr;
-
-    BoolSetting*   m_limitItemsEnabled = nullptr;
-    StringSetting* m_allowedItems = nullptr;
-
-    EnumSetting*   m_targetArea = nullptr;
-    EnumSetting*   m_targetMode = nullptr;
-
-    BoolSetting*   m_wallCheck = nullptr;
-    NumberSetting* m_predictionTicks = nullptr;
-
-    std::string m_lockedTargetName;
-    long long   m_lockValidMs = 0;
-    bool        m_wasMouseHeld = false;
-    Vector3     m_lastLocalPos{};
-    long long   m_lastLocalPosMs = 0;
-    bool        m_haveLastLocalPos = false;
-    long long   m_lastAimMs = 0;
-    long long   m_lastApplyMs = 0;   // dt normalization for per-frame aim
-
-    // Target name cache — findTarget (expensive) runs at 20Hz, but deltas
-    // are recomputed from fresh player data every tick for smooth aim.
-    std::string m_cachedTargetName;
-    bool        m_hasCachedTarget = false;
-    long long   m_lastTargetScanMs = 0;
+    long long m_miningStartTime = -1;
+    long long m_lastTickMs = 0;               // 20Hz gate
 };
