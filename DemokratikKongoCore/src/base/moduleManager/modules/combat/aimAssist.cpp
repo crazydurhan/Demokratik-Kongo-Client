@@ -157,7 +157,7 @@ namespace
         thread_local std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
 
         const float t = speed / 30.0f;
-        float stepSize = t * t * 180.0f;
+        float stepSize = t * t * 180.0f;   // degrees per game tick, like raven
 
         const float range = 0.6f * (randomizationPercent / 100.0f);
         const float multiplier = (range <= 0.001f) ? 1.0f
@@ -607,7 +607,6 @@ void AimAssist::applyRotation(float yaw, float pitch)
 void AimAssist::onEnable()
 {
     m_miningStartTime = -1;
-    m_lastTickMs = 0;
 }
 
 void AimAssist::onDisable()
@@ -615,18 +614,10 @@ void AimAssist::onDisable()
     m_miningStartTime = -1;
 }
 
-// raven applies aim per tick (onUpdate). Gate to 20Hz so smoothRotation's
-// per-step model matches Raven's pacing at any FPS.
-void AimAssist::onRender3D(float /*partialTicks*/)
-{
-    const long long now = nowMs();
-    if (now - m_lastTickMs < 50)
-        return;
-    m_lastTickMs = now;
-    tickAim();
-}
-
-void AimAssist::tickAim()
+// raven applies aim in onUpdate — the game's 20Hz tick. Our onTick hook is
+// the same client-thread tick, so smoothRotation's per-step model applies
+// exactly as designed.
+void AimAssist::onTick()
 {
     if (!conditionsMet())
         return;
