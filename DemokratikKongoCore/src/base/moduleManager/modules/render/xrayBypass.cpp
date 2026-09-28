@@ -16,9 +16,11 @@
 #include <cmath>
 #include <mutex>
 
+#include "../../../util/logger.h"
+
 namespace
 {
-    constexpr int kBlocksPerStep = 1200;   // JNI block reads per scan step
+    constexpr int kBlocksPerStep = 3000;   // JNI block reads per scan step
 
     unsigned int oreColor(const std::string& lower)
     {
@@ -134,7 +136,25 @@ bool XrayBypass::classInit()
         if (ibs) env->DeleteLocalRef(ibs);
     }
 
-    return m_getBlockState && m_blockPosCtor && m_getBlock;
+    const bool ok = m_getBlockState && m_blockPosCtor && m_getBlock;
+    {
+        static long long s_lastWarn = 0;
+        if (!ok && nowMs() - s_lastWarn > 5000)
+        {
+            s_lastWarn = nowMs();
+            Logger::Warn("XrayBypass", "JNI resolution incomplete: getBlockState="
+                + std::to_string(m_getBlockState != nullptr)
+                + " blockPosCtor=" + std::to_string(m_blockPosCtor != nullptr)
+                + " getBlock=" + std::to_string(m_getBlock != nullptr)
+                + " unlocalizedName=" + std::to_string(m_getUnlocalizedName != nullptr));
+        }
+        else if (ok && s_lastWarn != 0)
+        {
+            Logger::Info("XrayBypass", "JNI methods resolved.");
+            s_lastWarn = 0;
+        }
+    }
+    return ok;
 }
 
 void XrayBypass::resetScan()
@@ -151,10 +171,7 @@ void XrayBypass::resetScan()
     m_maxY = static_cast<int>(pos.y) + static_cast<int>(m_expandUp->value);
     m_cursorX = m_minX; m_cursorY = m_minY; m_cursorZ = m_minZ;
 
-    {
-        std::lock_guard<std::mutex> lock(m_marksMutex);
-        m_nextMarks.clear();
-    }
+    m_nextMarks.clear();
 }
 
 // Cache of Block -> unlocalized name. Blocks are JVM singletons, so a
@@ -258,6 +275,8 @@ void XrayBypass::scanStep()
             std::lock_guard<std::mutex> lock(m_marksMutex);
             m_marks.swap(m_nextMarks);
             m_nextMarks.clear();
+            Logger::Info("XrayBypass", "Sweep done — " + std::to_string(m_marks.size())
+                + " blocks marked.");
             resetScan();   // starts the next pass
             return;
         }
@@ -325,9 +344,12 @@ void XrayBypass::scanStep()
             if (exposed)
             {
             unsigned int col = oreColor(lowerCopy(matchedName));
-                m_nextMarks.push_back(BlockMark{
+                std::lock_guard<std::mutex> lock(m_marksMutex);
+                m_marks.push_back(BlockMark{
                     static_cast<float>(x), static_cast<float>(y),
                     static_cast<float>(z), col });
+                if (m_marks.size() > 8000)
+                    m_marks.erase(m_marks.begin());
             }
         }
         env->DeleteLocalRef(blockObj);
@@ -351,9 +373,12 @@ void XrayBypass::onTick()
     const long long now = nowMs();
 
     // full rescan cadence + player moved far from scan origin
-    const bool moved = (SDK::Minecraft->thePlayer->GetPos() - m_scanOrigin).Length() > 8.0f;
+    const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
+    const bool outsideBox =
+        ppos.x < static_cast<float>(m_minX - 8) || ppos.x > static_cast<float>(m_maxX + 8) ||
+        ppos.z < static_cast<float>(m_minZ - 8) || ppos.z > static_cast<float>(m_maxZ + 8);
     const bool rescan = now - m_lastScanMs >= static_cast<long long>(m_scanDelay->value)
-                        || moved
+                        || outsideBox
                         || m_lastScanMs == 0;
     if (rescan)
     {
