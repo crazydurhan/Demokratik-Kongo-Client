@@ -897,6 +897,9 @@ const Entry kEntries[] =
 	{ "org/lwjgl/opengl/GL20", "glUniformMatrix4", "(IZLjava/nio/FloatBuffer;)V", 1, 1 },
 	{ "org/lwjgl/opengl/GL33", "glBindSampler", "(II)V", 1, 1 },
 	{ "org/lwjgl/opengl/GL33", "glGetIntegeri", "(II)I", 1, 1 },
+	{ "net/minecraft/world/World", "getBlockState|func_180495_a|a", "(Lnet/minecraft/util/BlockPos;)Lnet/minecraft/block/state/IBlockState;", 1, 0 },
+	{ "net/minecraft/block/Block", "getUnlocalizedName|func_149739_a|a", "()Ljava/lang/String;", 1, 0 },
+	{ "net/minecraft/util/BlockPos", "<init>", "(III)V", 1, 0 },
 };
 const unsigned int kEntryCount = sizeof(kEntries) / sizeof(kEntries[0]);
 

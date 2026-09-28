@@ -5,6 +5,7 @@
 #include "../java/java.h"
 
 #include "modules/render/esp3d.h"
+#include "modules/render/xrayBypass.h"
 #include "modules/render/nametags.h"
 #include "modules/render/nametags.h"
 #include "modules/render/arrayList.h"
@@ -168,6 +169,7 @@ void ModuleManager::Init()
 
     // Render
     registerModule<Esp3D>();
+    registerModule<XrayBypass>();
     registerModule<NameTags>();
     registerModule<ArrayList>();
     registerModule<Tracers>();
