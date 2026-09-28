@@ -53,6 +53,7 @@ private:
     int m_minX = 0, m_maxX = 0, m_minY = 0, m_maxY = 0, m_minZ = 0, m_maxZ = 0;
     long long m_lastScanMs = 0;
     long long m_lastStepMs = 0;
+    bool m_passDone = false;
     Vector3 m_scanOrigin{};
 
     std::vector<BlockMark> m_marks;          // render thread reads

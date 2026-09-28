@@ -342,7 +342,7 @@ void XrayBypass::scanStep()
             g_diag.summarize();
             Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
                 + " blocks marked.");
-            resetScan();   // starts the next pass
+            m_passDone = true;   // onTick starts the next pass after ScanDelay
             return;
         }
 
@@ -503,12 +503,16 @@ void XrayBypass::onTick()
         ppos.x < static_cast<float>(m_minX - 8) || ppos.x > static_cast<float>(m_maxX + 8) ||
         ppos.z < static_cast<float>(m_minZ - 8) || ppos.z > static_cast<float>(m_maxZ + 8);
     const long long scanDelayMs = std::max<long long>(200, static_cast<long long>(m_scanDelay->value));
-    const bool rescan = now - m_lastScanMs >= scanDelayMs
-                        || outsideBox
-                        || m_lastScanMs == 0;
-    if (rescan)
+
+    // A pass is atomic: the cursor runs to completion with no periodic resets.
+    // A new pass starts only when the player left the box (recenter), on first
+    // tick, or after the previous pass finished and ScanDelay elapsed.
+    const bool firstEver = (m_lastScanMs == 0);
+    const bool afterDone = m_passDone && (now - m_lastScanMs >= scanDelayMs);
+    if (outsideBox || firstEver || afterDone)
     {
         m_lastScanMs = now;
+        m_passDone = false;
         resetScan();
     }
 
