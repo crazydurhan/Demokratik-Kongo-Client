@@ -212,6 +212,7 @@
     <ClInclude Include="src/base/moduleManager/modules/movement/sprint.h" />
     <ClInclude Include="src/base/moduleManager/modules/render/arrayList.h" />
     <ClInclude Include="src/base/moduleManager/modules/render/esp3d.h" />
+    <ClInclude Include="src/base/moduleManager/modules/render/xrayBypass.h" />
     <ClInclude Include="src/base/moduleManager/modules/render/tracers.h" />
     <ClInclude Include="src/base/moduleManager/modules/render/fullbright.h" />
     <ClInclude Include="src/base/moduleManager/modules/render/itemEsp.h" />
@@ -354,6 +355,7 @@
     <ClCompile Include="src/base/moduleManager/modules/player/freecam.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/render/arrayList.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/render/esp3d.cpp" />
+    <ClCompile Include="src/base/moduleManager/modules/render/xrayBypass.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/render/tracers.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/render/fullbright.cpp" />
     <ClCompile Include="src/base/moduleManager/modules/render/itemEsp.cpp" />
