@@ -37,6 +37,13 @@ private:
     void resetScan();
     void scanStep();
     void verifyStep();
+
+    // packet dig-probe: sends C07 start/abort pairs at candidate positions so
+    // the server re-sends the real block (fake vs real becomes observable)
+    bool packetInit();
+    void probeStep(long long now);
+    bool readNameAt(int x, int y, int z, bool& stillOre);
+    bool sendDig(int x, int y, int z, bool start);
     bool classInit();
 
     bool resolveName(JNIEnv* env, jobject blockObj, std::string& outName);
@@ -52,6 +59,8 @@ private:
     BoolSetting*   m_allBlocks = nullptr;
     BoolSetting*   m_verifyOn = nullptr;     // proximity re-check removes fake blocks
     BoolSetting*   m_onlyReal = nullptr;     // render only confirmed-real marks
+    BoolSetting*   m_packetScan = nullptr;   // dig-probe packets (server re-sends real blocks)
+    NumberSetting* m_probeDelay = nullptr;   // ms between probes
     EnumSetting*   m_mode = nullptr;         // Outline / Fill
     StringSetting* m_whitelist = nullptr;    // comma list, substring match
     ColorSetting*  m_color = nullptr;
@@ -63,6 +72,21 @@ private:
     long long m_lastStepMs = 0;
     long long m_lastVerifyMs = 0;
     bool m_passDone = false;
+
+    // packet dig-probe state
+    jclass    m_c07Class = nullptr;
+    jmethodID m_c07Ctor = nullptr;
+    jfieldID  m_sendQueueField = nullptr;
+    jmethodID m_addToSendQueue = nullptr;
+    jobject   m_actionStart = nullptr;   // global refs
+    jobject   m_actionAbort = nullptr;
+    jobject   m_facingUp = nullptr;
+    bool      m_packetInitFailed = false;
+    bool      m_probeAwait = false;
+    long long m_probeSentMs = 0;
+    long long m_probeNextMs = 0;
+    int       m_probeX = 0, m_probeY = 0, m_probeZ = 0;
+    std::set<std::array<int, 3>> m_probed;
     Vector3 m_scanOrigin{};
 
     std::vector<BlockMark> m_marks;          // render thread reads
