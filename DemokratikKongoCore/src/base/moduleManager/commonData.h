@@ -190,10 +190,10 @@ struct CommonData
 	{
 		if (!SanityCheck()) return;
 
-		// Gather camera/render state into locals first, then publish them as one
-		// locked block so the render thread never observes a half-updated set.
-		Matrix  l_modelView   = SDK::Minecraft->activeRenderInfo->ModelViewMatrix();
-		Matrix  l_projection  = SDK::Minecraft->activeRenderInfo->ProjectionMatrix();
+		// NOTE: matrices are NOT read here. A tick-phase read can catch a
+		// different GL pass (hand/GUI) and corrupt the camera transform;
+		// RefreshRenderState() (called from the world-pass hook) is the only
+		// writer for modelView/projection.
 		float   l_fov         = SDK::Minecraft->gameSettings->GetFOV();
 		int     l_thirdPerson = SDK::Minecraft->gameSettings->GetThirdPersonView();
 		Vector2 l_angles      = SDK::Minecraft->thePlayer->GetAngles();
@@ -208,8 +208,6 @@ struct CommonData
 
 		{
 			std::lock_guard<std::mutex> lock(renderStateMutex);
-			modelView          = l_modelView;
-			projection         = l_projection;
 			fov                = l_fov;
 			thirdPersonView    = l_thirdPerson;
 			localPlayerAngles  = l_angles;
