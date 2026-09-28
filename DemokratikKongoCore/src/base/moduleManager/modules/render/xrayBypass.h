@@ -21,6 +21,9 @@ public:
     void onTick() override;
     void onRender2D() override;
 
+    // marks stay on screen after the one-shot scan auto-disables the module
+    bool renderWhenDisabled() const override { return m_passDone; }
+
     std::string arrayListSuffix(SuffixDetail detail) const override;
 
 private:
@@ -34,6 +37,7 @@ private:
     void scanStep();
     bool classInit();
 
+    bool resolveName(JNIEnv* env, jobject blockObj, std::string& outName);
     bool matchBlock(jobject blockObj, std::string& outName);
     bool isAir(jobject blockObj);
 
@@ -61,8 +65,10 @@ private:
     std::mutex m_marksMutex;
 
     // Block objects are JVM singletons — cache name per instance.
-    std::unordered_map<jobject, std::string> m_nameCache;   // global-ref keys
-    std::vector<jobject> m_cacheRefs;                        // for cleanup
+    // Local and global refs to one object are different jobject handles, so
+    // identity is checked with IsSameObject, never pointer equality.
+    std::vector<jobject> m_cacheRefs;
+    std::vector<std::string> m_cacheNames;
 
     // resolved JNI
     jclass m_blockPosClass = nullptr;

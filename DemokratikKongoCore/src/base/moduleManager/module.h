@@ -70,6 +70,10 @@ public:
     virtual void onTick()    {}      // game tick
     virtual void onRender2D() {}     // 2D overlay (ImDrawList in screen space)
 
+    // One-shot modules (e.g. XrayBypass) keep drawing their results after
+    // auto-disable; the manager still dispatches onRender2D for them.
+    virtual bool renderWhenDisabled() const { return false; }
+
     // 3D world-space pass. Called from inside Minecraft's world render,
     // AFTER MC has set up its modelview/projection matrices but BEFORE
     // particles. The model matrix is in CAMERA SPACE (entity positions

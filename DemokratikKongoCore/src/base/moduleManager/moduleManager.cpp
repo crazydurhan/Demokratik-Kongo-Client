@@ -330,7 +330,7 @@ void ModuleManager::OnRender2D()
     // Hold the storage lock during dispatch (see g_modulesMutex note).
     std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
-        if (!mod->toggleable() || mod->isEnabled())
+        if (!mod->toggleable() || mod->isEnabled() || mod->renderWhenDisabled())
             mod->onRender2D();
 }
 
