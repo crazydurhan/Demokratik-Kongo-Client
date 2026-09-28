@@ -26,9 +26,10 @@ struct CommonData
 	static bool DataUpdated();
 	static void SetDataUpdated(bool v);
 	inline static bool inGui = false;
-	inline static Matrix modelView;
+	inline static Matrix modelView;      // ROTATION-ONLY (translation zeroed)
 	inline static Matrix projection;
 	inline static Vector3 renderPos;
+	inline static Vector3 camPos;        // raw camera render position (renderManager)
 	inline static float renderPartialTicks;
 	inline static float fov;
 	inline static int thirdPersonView;
@@ -39,9 +40,10 @@ struct CommonData
 	// GetRenderState() to obtain a consistent, tear-free snapshot.
 	inline static std::mutex renderStateMutex;
 	struct RenderState {
-		Matrix  modelView;
+		Matrix  modelView;          // rotation-only; pair with camPos
 		Matrix  projection;
 		Vector3 renderPos;
+		Vector3 camPos;
 		float   renderPartialTicks = 0.0f;
 		float   fov = 0.0f;
 		int     thirdPersonView = 0;
@@ -50,7 +52,7 @@ struct CommonData
 	static RenderState GetRenderState()
 	{
 		std::lock_guard<std::mutex> lock(renderStateMutex);
-		return RenderState{ modelView, projection, renderPos,
+		return RenderState{ modelView, projection, renderPos, camPos,
 			renderPartialTicks, fov, thirdPersonView, localPlayerAngles };
 	}
 	
@@ -148,7 +150,14 @@ struct CommonData
 	{
 		if (!SanityCheck()) return;
 
+		// The MODELVIEW snapshot the game exposes carries the camera ROTATION
+		// only (its translation stays near the origin). Points must first be
+		// made camera-relative with the raw render position, so zero out the
+		// residual translation and publish camPos alongside.
 		Matrix  l_modelView   = SDK::Minecraft->activeRenderInfo->ModelViewMatrix();
+		l_modelView.m30 = 0.0f; l_modelView.m31 = 0.0f; l_modelView.m32 = 0.0f;
+		l_modelView.m33 = 1.0f;
+
 		Matrix  l_projection  = SDK::Minecraft->activeRenderInfo->ProjectionMatrix();
 		float   l_fov         = SDK::Minecraft->gameSettings->GetFOV();
 		int     l_thirdPerson = SDK::Minecraft->gameSettings->GetThirdPersonView();
@@ -160,6 +169,7 @@ struct CommonData
 
 		Vector3 l_renderPos    = SDK::Minecraft->renderManager->RenderPos()
 		                       + Vector3{ 0, ySubtractValue, 0 };
+		Vector3 l_camPos       = SDK::Minecraft->renderManager->RenderPos();
 		float   l_partialTicks = SDK::Minecraft->timer->GetRenderPartialTicks();
 
 		std::lock_guard<std::mutex> lock(renderStateMutex);
@@ -169,6 +179,7 @@ struct CommonData
 		thirdPersonView    = l_thirdPerson;
 		localPlayerAngles  = l_angles;
 		renderPos          = l_renderPos;
+		camPos             = l_camPos;
 		renderPartialTicks = l_partialTicks;
 	}
 

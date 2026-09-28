@@ -609,20 +609,18 @@ void XrayBypass::onRender2D()
             Logger::Info("XrayBypass", "mark0=" + std::to_string(marks.front().x) + "," + std::to_string(marks.front().y) + "," + std::to_string(marks.front().z)
                 + " camPos=" + std::to_string(rs.renderPos.x) + "," + std::to_string(rs.renderPos.y) + "," + std::to_string(rs.renderPos.z));
         }
+        const Vector3 rel{ marks.empty() ? 0.0f : (marks.front().x - rs.camPos.x),
+                           marks.empty() ? 0.0f : (marks.front().y - rs.camPos.y),
+                           marks.empty() ? 0.0f : (marks.front().z - rs.camPos.z) };
+        const Vector4 view = CWorldToScreen::Multiply(Vector4{ rel.x, rel.y, rel.z, 1.0f }, rs.modelView);
         Vector2 probe;
         const bool probed = CWorldToScreen::WorldToScreenVisible(
-            Vector3{ marks.empty() ? 0.0f : marks.front().x,
-                     marks.empty() ? 0.0f : marks.front().y,
-                     marks.empty() ? 0.0f : marks.front().z },
-            rs.modelView, rs.projection, sw, sh, probe);
-        Vector2 cam;
-        const bool camOk = CWorldToScreen::WorldToScreenVisible(
-            rs.renderPos, rs.modelView, rs.projection, sw, sh, cam);
+            rel, rs.modelView, rs.projection, sw, sh, probe);
         Logger::Info("XrayBypass", "render diag: mv.m00=" + std::to_string(rs.modelView.m00)
             + " proj.m00=" + std::to_string(rs.projection.m00)
-            + " camPos=" + std::to_string(rs.renderPos.x) + "," + std::to_string(rs.renderPos.y)
-            + "," + std::to_string(rs.renderPos.z)
-            + " camProbe=" + (camOk ? (std::to_string(cam.x) + "," + std::to_string(cam.y)) : "off")
+            + " camPos=" + std::to_string(rs.camPos.x) + "," + std::to_string(rs.camPos.y)
+            + "," + std::to_string(rs.camPos.z)
+            + " relView=" + std::to_string(view.x) + "," + std::to_string(view.y) + "," + std::to_string(view.z)
             + " center=" + std::to_string(sw / 2) + "," + std::to_string(sh / 2)
             + " marks=" + std::to_string(marks.size())
             + " probeW2S=" + std::to_string(probed ? 1 : 0)
@@ -630,17 +628,19 @@ void XrayBypass::onRender2D()
     }
 
 
+    const Vector3 cam = rs.camPos;
     for (const BlockMark& m : marks)
     {
+        // camera-relative corners: modelView is rotation-only
         Vector3 corners[8] = {
-            { m.x,     m.y,     m.z     },
-            { m.x + 1, m.y,     m.z     },
-            { m.x + 1, m.y,     m.z + 1 },
-            { m.x,     m.y,     m.z + 1 },
-            { m.x,     m.y + 1, m.z     },
-            { m.x + 1, m.y + 1, m.z     },
-            { m.x + 1, m.y + 1, m.z + 1 },
-            { m.x,     m.y + 1, m.z + 1 },
+            { m.x     - cam.x, m.y     - cam.y, m.z     - cam.z },
+            { m.x + 1 - cam.x, m.y     - cam.y, m.z     - cam.z },
+            { m.x + 1 - cam.x, m.y     - cam.y, m.z + 1 - cam.z },
+            { m.x     - cam.x, m.y     - cam.y, m.z + 1 - cam.z },
+            { m.x     - cam.x, m.y + 1 - cam.y, m.z     - cam.z },
+            { m.x + 1 - cam.x, m.y + 1 - cam.y, m.z     - cam.z },
+            { m.x + 1 - cam.x, m.y + 1 - cam.y, m.z + 1 - cam.z },
+            { m.x     - cam.x, m.y + 1 - cam.y, m.z + 1 - cam.z },
         };
 
         ImVec2 pts[8];
