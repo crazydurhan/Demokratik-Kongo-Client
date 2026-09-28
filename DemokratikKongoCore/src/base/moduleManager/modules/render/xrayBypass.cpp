@@ -147,7 +147,15 @@ bool XrayBypass::classInit()
     {
         CWorld* world = SDK::Minecraft ? SDK::Minecraft->theWorld : nullptr;
         if (!world || !world->GetInstance())
+        {
+            static long long s_lastW = 0;
+            if (nowMs() - s_lastW > 5000)
+            {
+                s_lastW = nowMs();
+                Logger::Warn("XrayBypass", "classInit: theWorld or world instance is null");
+            }
             return false;
+        }
 
         jclass worldCls = env->GetObjectClass(world->GetInstance());
         if (!worldCls)
@@ -295,7 +303,18 @@ void XrayBypass::scanStep()
     CWorld* world = SDK::Minecraft ? SDK::Minecraft->theWorld : nullptr;
     jobject worldObj = world ? world->GetInstance() : nullptr;
     if (!env || !worldObj || !m_getBlockState || !m_blockPosCtor)
+    {
+        static long long s_lastW = 0;
+        if (nowMs() - s_lastW > 5000)
+        {
+            s_lastW = nowMs();
+            Logger::Warn("XrayBypass", "scanStep abort: env=" + std::to_string(env != nullptr)
+                + " worldObj=" + std::to_string(worldObj != nullptr)
+                + " getBlockState=" + std::to_string(m_getBlockState != nullptr)
+                + " blockPosCtor=" + std::to_string(m_blockPosCtor != nullptr));
+        }
         return;
+    }
 
     JniResolve::LocalFrame frame(env, 64);
     if (!frame.env)
