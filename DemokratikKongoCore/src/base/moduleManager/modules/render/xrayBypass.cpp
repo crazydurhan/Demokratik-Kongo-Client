@@ -312,7 +312,7 @@ void XrayBypass::scanStep()
             m_marks.swap(m_nextMarks);
             m_nextMarks.clear();
             g_diag.summarize();
-            Logger::Info("XrayBypass", "Sweep done — " + std::to_string(m_marks.size())
+            Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
                 + " blocks marked.");
             resetScan();   // starts the next pass
             return;
@@ -396,11 +396,11 @@ void XrayBypass::scanStep()
             {
             unsigned int col = oreColor(lowerCopy(matchedName));
                 std::lock_guard<std::mutex> lock(m_marksMutex);
-                m_marks.push_back(BlockMark{
+                m_nextMarks.push_back(BlockMark{
                     static_cast<float>(x), static_cast<float>(y),
                     static_cast<float>(z), col });
-                if (m_marks.size() > 8000)
-                    m_marks.erase(m_marks.begin());
+                if (m_nextMarks.size() > 8000)
+                    m_nextMarks.erase(m_nextMarks.begin());
             }
         }
         env->DeleteLocalRef(blockObj);
