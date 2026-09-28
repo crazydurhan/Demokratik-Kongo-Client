@@ -111,6 +111,10 @@ XrayBypass::XrayBypass()
     m_allBlocks = &add<BoolSetting>("AllBlocks", false);
     m_verifyOn = &add<BoolSetting>("Verify", true);
     m_onlyReal = &add<BoolSetting>("OnlyReal", false);
+    m_packetScan = &add<BoolSetting>("PacketScan", false);
+    m_probeDelay = &add<NumberSetting>("ProbeDelay", 200.0f, 100.0f, 2000.0f, 50.0f);
+    m_probeDelay->suffix = " ms";
+    m_probeDelay->visible = [this]{ return m_packetScan->value; };
     m_mode = &add<EnumSetting>("Mode", std::vector<const char*>{ "Outline", "Fill" }, 0);
     m_whitelist = &add<StringSetting>("Whitelist", "diamond,emerald,iron,gold,redstone,lapis,coal,quartz");
     m_whitelist->itemList = true;
@@ -141,6 +145,9 @@ void XrayBypass::onEnable()
     m_lastScanMs = 0;   // first tick starts a fresh pass from the current position
     m_lastStepMs = 0;
     m_lastVerifyMs = 0;
+    m_probeAwait = false;
+    m_probeNextMs = 0;
+    m_probed.clear();
     Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
 }
 
@@ -539,12 +546,14 @@ void XrayBypass::onTick()
 
     if (m_passDone)
     {
-        // one-shot scan finished — only proximity verification runs now
+        // one-shot scan finished — only continuous checks run now
         if (m_verifyOn->value && now - m_lastVerifyMs >= 2000)
         {
             m_lastVerifyMs = now;
             verifyStep();
         }
+        if (m_packetScan->value)
+            probeStep(now);
         return;
     }
 
@@ -563,6 +572,7 @@ void XrayBypass::onTick()
             + " smart=" + std::to_string(m_smartScan->value ? 1 : 0)
             + " verify=" + std::to_string(m_verifyOn->value ? 1 : 0)
             + " onlyReal=" + std::to_string(m_onlyReal->value ? 1 : 0)
+            + " packetScan=" + std::to_string(m_packetScan->value ? 1 : 0)
             + " wl=" + m_whitelist->value);
     }
 
@@ -818,5 +828,449 @@ void XrayBypass::onRender2D()
             : ((m.color & 0x00FFFFFFu) | (110u << 24));
         for (const auto& e : edges)
             dl->AddLine(pts[e[0]], pts[e[1]], lineCol, 1.4f);
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Packet dig-probe (experimental): build C07PacketPlayerDigging(Action,
+// BlockPos, EnumFacing) and queue it, so anti-xray servers re-evaluate the
+// block and (on many configs) re-send its REAL value. A probe that changes
+// from ore to stone/air proves the mark was a fake; an unchanged mark is
+// left alone. START is always followed by ABORT so nothing is ever broken.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // find a method of cls whose name matches one of the variants and which
+    // takes `argc` params and returns void; builds the runtime descriptor by
+    // reflection so obfuscated names never matter
+    jmethodID findMethodByNames(JNIEnv* env, jclass cls,
+        const char* const* names, int nameCount, int argc)
+    {
+        if (!env || !cls)
+            return nullptr;
+        jclass classClass = env->FindClass("java/lang/Class");
+        if (!classClass) { JniResolve::ClearException(env); return nullptr; }
+        jmethodID getDeclaredMethods = env->GetMethodID(classClass, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
+        JniResolve::ClearException(env);
+        jclass methodClass = env->FindClass("java/lang/reflect/Method");
+        jmethodID getName = methodClass ? env->GetMethodID(methodClass, "getName", "()Ljava/lang/String;") : nullptr;
+        jmethodID getParameterTypes = methodClass ? env->GetMethodID(methodClass, "getParameterTypes", "()[Ljava/lang/Class;") : nullptr;
+        if (!getDeclaredMethods || !getName || !getParameterTypes)
+        {
+            JniResolve::ClearException(env);
+            return nullptr;
+        }
+
+        jmethodID result = nullptr;
+        jobjectArray methods = (jobjectArray)env->CallObjectMethod(cls, getDeclaredMethods);
+        JniResolve::ClearException(env);
+        if (methods)
+        {
+            const jsize n = env->GetArrayLength(methods);
+            for (jsize i = 0; i < n && !result; ++i)
+            {
+                jobject m = env->GetObjectArrayElement(methods, i);
+                if (!m)
+                    continue;
+                jstring jn = (jstring)env->CallObjectMethod(m, getName);
+                JniResolve::ClearException(env);
+                const char* nm = jn ? env->GetStringUTFChars(jn, nullptr) : nullptr;
+                bool nameHit = false;
+                for (int k = 0; nm && k < nameCount; ++k)
+                    if (std::strcmp(nm, names[k]) == 0) { nameHit = true; break; }
+                if (nm) env->ReleaseStringUTFChars(jn, nm);
+                if (jn) env->DeleteLocalRef(jn);
+
+                if (nameHit)
+                {
+                    jobjectArray params = (jobjectArray)env->CallObjectMethod(m, getParameterTypes);
+                    JniResolve::ClearException(env);
+                    if (params && env->GetArrayLength(params) == argc)
+                    {
+                        std::string sig = "(";
+                        for (jsize k = 0; k < argc; ++k)
+                        {
+                            jclass pc = (jclass)env->GetObjectArrayElement(params, k);
+                            sig += JniResolve::ClassToDescriptor(env, pc);
+                            env->DeleteLocalRef(pc);
+                        }
+                        sig += ")V";
+                        // re-fetch the name for the GetMethodID call
+                        jstring jn2 = (jstring)env->CallObjectMethod(m, getName);
+                        const char* nm2 = jn2 ? env->GetStringUTFChars(jn2, nullptr) : nullptr;
+                        if (nm2)
+                        {
+                            result = env->GetMethodID(cls, nm2, sig.c_str());
+                            JniResolve::ClearException(env);
+                            env->ReleaseStringUTFChars(jn2, nm2);
+                        }
+                        if (jn2) env->DeleteLocalRef(jn2);
+                    }
+                    if (params) env->DeleteLocalRef(params);
+                }
+                env->DeleteLocalRef(m);
+            }
+            env->DeleteLocalRef(methods);
+        }
+        env->DeleteLocalRef(classClass);
+        if (methodClass) env->DeleteLocalRef(methodClass);
+        return result;
+    }
+}
+
+bool XrayBypass::packetInit()
+{
+    if (m_c07Ctor && m_addToSendQueue && m_sendQueueField && m_actionStart && m_actionAbort && m_facingUp)
+        return true;
+    if (m_packetInitFailed)
+        return false;
+
+    JNIEnv* env = Java::GetEnv();
+    if (!env)
+        return false;
+
+    JniResolve::LocalFrame frame(env, 96);
+    if (!frame.env)
+        return false;
+
+    m_packetInitFailed = true;   // set false again on success
+
+    // --- C07 class via the alias table ---
+    if (!Java::AssignClass("net/minecraft/network/play/client/C07PacketPlayerDigging", m_c07Class))
+        return false;
+
+    // --- constructor (Action, BlockPos, EnumFacing) by reflection ---
+    jclass classClass = env->FindClass("java/lang/Class");
+    jclass ctorClass = env->FindClass("java/lang/reflect/Constructor");
+    if (!classClass || !ctorClass)
+    {
+        JniResolve::ClearException(env);
+        return false;
+    }
+    jmethodID getDeclaredConstructors = env->GetMethodID(classClass, "getDeclaredConstructors", "()[Ljava/lang/reflect/Constructor;");
+    jmethodID getParameterTypes = env->GetMethodID(ctorClass, "getParameterTypes", "()[Ljava/lang/Class;");
+    jmethodID isEnumMethod = env->GetMethodID(classClass, "isEnum", "()Z");
+    jmethodID getEnumConstants = env->GetMethodID(classClass, "getEnumConstants", "()[Ljava/lang/Object;");
+    if (!getDeclaredConstructors || !getParameterTypes || !isEnumMethod || !getEnumConstants)
+    {
+        JniResolve::ClearException(env);
+        return false;
+    }
+
+    jclass actionCls = nullptr;
+    jclass facingCls = nullptr;
+    jobjectArray ctors = (jobjectArray)env->CallObjectMethod(m_c07Class, getDeclaredConstructors);
+    JniResolve::ClearException(env);
+    if (ctors)
+    {
+        const jsize n = env->GetArrayLength(ctors);
+        for (jsize i = 0; i < n && !m_c07Ctor; ++i)
+        {
+            jobject ctor = env->GetObjectArrayElement(ctors, i);
+            if (!ctor)
+                continue;
+            jobjectArray params = (jobjectArray)env->CallObjectMethod(ctor, getParameterTypes);
+            JniResolve::ClearException(env);
+            if (params && env->GetArrayLength(params) == 3)
+            {
+                jclass p0 = (jclass)env->GetObjectArrayElement(params, 0);
+                jclass p1 = (jclass)env->GetObjectArrayElement(params, 1);
+                jclass p2 = (jclass)env->GetObjectArrayElement(params, 2);
+                const jboolean p0enum = p0 ? env->CallBooleanMethod(p0, isEnumMethod) : JNI_FALSE;
+                JniResolve::ClearException(env);
+                if (p0enum && p1 && p2)
+                {
+                    // BlockPos is the param that matches our scan BlockPos class
+                    if (env->IsSameObject(p1, m_blockPosClass))
+                    {
+                        actionCls = (jclass)env->NewGlobalRef(p0);
+                        facingCls = (jclass)env->NewGlobalRef(p2);
+                    }
+                    else if (env->IsSameObject(p2, m_blockPosClass))
+                    {
+                        actionCls = (jclass)env->NewGlobalRef(p0);
+                        facingCls = (jclass)env->NewGlobalRef(p1);
+                    }
+
+                    std::string sig = "(";
+                    sig += JniResolve::ClassToDescriptor(env, p0);
+                    sig += JniResolve::ClassToDescriptor(env, p1);
+                    sig += JniResolve::ClassToDescriptor(env, p2);
+                    sig += ")V";
+                    m_c07Ctor = env->GetMethodID(m_c07Class, "<init>", sig.c_str());
+                    JniResolve::ClearException(env);
+                }
+                if (p0) env->DeleteLocalRef(p0);
+                if (p1) env->DeleteLocalRef(p1);
+                if (p2) env->DeleteLocalRef(p2);
+            }
+            if (params) env->DeleteLocalRef(params);
+            env->DeleteLocalRef(ctor);
+        }
+        env->DeleteLocalRef(ctors);
+    }
+    if (!m_c07Ctor || !actionCls || !facingCls)
+        return false;
+
+    // --- enum constants: Action{START=0, ABORT=1}, Facing{..., UP=1} (1.8.9) ---
+    {
+        jobjectArray acts = (jobjectArray)env->CallObjectMethod(actionCls, getEnumConstants);
+        JniResolve::ClearException(env);
+        if (!acts || env->GetArrayLength(acts) < 6)
+        {
+            if (acts) env->DeleteLocalRef(acts);
+            return false;
+        }
+        jobject a0 = env->GetObjectArrayElement(acts, 0);
+        jobject a1 = env->GetObjectArrayElement(acts, 1);
+        m_actionStart = env->NewGlobalRef(a0);
+        m_actionAbort = env->NewGlobalRef(a1);
+        env->DeleteLocalRef(a0);
+        env->DeleteLocalRef(a1);
+        env->DeleteLocalRef(acts);
+
+        jobjectArray facs = (jobjectArray)env->CallObjectMethod(facingCls, getEnumConstants);
+        JniResolve::ClearException(env);
+        if (!facs || env->GetArrayLength(facs) < 6)
+        {
+            if (facs) env->DeleteLocalRef(facs);
+            return false;
+        }
+        jobject f1 = env->GetObjectArrayElement(facs, 1);
+        m_facingUp = env->NewGlobalRef(f1);
+        env->DeleteLocalRef(f1);
+        env->DeleteLocalRef(facs);
+    }
+    env->DeleteLocalRef(actionCls);
+    env->DeleteLocalRef(facingCls);
+
+    // --- sendQueue field on EntityPlayerSP + addToSendQueue ---
+    jclass playerCls = nullptr;
+    if (!Java::AssignClass("net/minecraft/client/entity/EntityPlayerSP", playerCls))
+        return false;
+
+    classClass = env->FindClass("java/lang/Class");
+    jclass fieldClass = env->FindClass("java/lang/reflect/Field");
+    if (!classClass || !fieldClass)
+    {
+        JniResolve::ClearException(env);
+        return false;
+    }
+    jmethodID getDeclaredFields = env->GetMethodID(classClass, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
+    jmethodID fieldGetName = env->GetMethodID(fieldClass, "getName", "()Ljava/lang/String;");
+    jmethodID fieldGetType = env->GetMethodID(fieldClass, "getType", "()Ljava/lang/Class;");
+    JniResolve::ClearException(env);
+
+    static const char* kSendNames[] = { "sendQueue", "field_71174_a", "a" };
+    static const char* kSendMethods[] = { "addToSendQueue", "func_147297_a", "a" };
+
+    if (getDeclaredFields && fieldGetName && fieldGetType)
+    {
+        jobjectArray fields = (jobjectArray)env->CallObjectMethod(playerCls, getDeclaredFields);
+        JniResolve::ClearException(env);
+        if (fields)
+        {
+            const jsize n = env->GetArrayLength(fields);
+            for (jsize i = 0; i < n && !m_sendQueueField; ++i)
+            {
+                jobject f = env->GetObjectArrayElement(fields, i);
+                if (!f)
+                    continue;
+                jstring jn = (jstring)env->CallObjectMethod(f, fieldGetName);
+                const char* nm = jn ? env->GetStringUTFChars(jn, nullptr) : nullptr;
+                bool hit = false;
+                for (const char* cand : kSendNames)
+                    if (nm && std::strcmp(nm, cand) == 0) { hit = true; break; }
+                if (nm) env->ReleaseStringUTFChars(jn, nm);
+                if (jn) env->DeleteLocalRef(jn);
+
+                if (hit)
+                {
+                    jclass typeCls = (jclass)env->CallObjectMethod(f, fieldGetType);
+                    JniResolve::ClearException(env);
+                    if (typeCls)
+                    {
+                        // the field type must carry the send method — that rules
+                        // out the many same-letter fields on EntityPlayerSP
+                        jmethodID sender = findMethodByNames(env, typeCls,
+                            kSendMethods, 3, 1);
+                        if (sender)
+                        {
+                            std::string fdesc = JniResolve::ClassToDescriptor(env, typeCls);
+                            m_sendQueueField = env->GetFieldID(playerCls, nm, fdesc.c_str());
+                            JniResolve::ClearException(env);
+                            m_addToSendQueue = sender;
+                        }
+                        env->DeleteLocalRef(typeCls);
+                    }
+                }
+                env->DeleteLocalRef(f);
+            }
+            env->DeleteLocalRef(fields);
+        }
+    }
+
+    m_packetInitFailed = !(m_sendQueueField && m_addToSendQueue &&
+                           m_c07Ctor && m_actionStart && m_actionAbort && m_facingUp);
+    if (!m_packetInitFailed)
+        Logger::Info("XrayBypass", "PacketScan ready: C07 dig-probe initialized.");
+    else
+        Logger::Warn("XrayBypass", "PacketScan init failed (ctor/field/method resolution).");
+    return !m_packetInitFailed;
+}
+
+bool XrayBypass::sendDig(int x, int y, int z, bool start)
+{
+    if (!packetInit())
+        return false;
+    JNIEnv* env = Java::GetEnv();
+    if (!env || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
+        return false;
+
+    JniResolve::LocalFrame frame(env, 16);
+    if (!frame.env)
+        return false;
+
+    jobject bp = env->NewObject(m_blockPosClass, m_blockPosCtor, (jint)x, (jint)y, (jint)z);
+    if (!bp)
+    {
+        JniResolve::ClearException(env);
+        return false;
+    }
+    jobject pkt = env->NewObject(m_c07Class, m_c07Ctor,
+        start ? m_actionStart : m_actionAbort, bp, m_facingUp);
+    JniResolve::ClearException(env);
+    env->DeleteLocalRef(bp);
+    if (!pkt)
+        return false;
+
+    jobject player = SDK::Minecraft->thePlayer->GetInstance();
+    jobject nh = player ? env->GetObjectField(player, m_sendQueueField) : nullptr;
+    JniResolve::ClearException(env);
+    bool ok = false;
+    if (nh)
+    {
+        env->CallVoidMethod(nh, m_addToSendQueue, pkt);
+        ok = !env->ExceptionCheck();
+        JniResolve::ClearException(env);
+        env->DeleteLocalRef(nh);
+    }
+    env->DeleteLocalRef(pkt);
+    return ok;
+}
+
+// true if the position reads as a listed ore right now; false = no longer one
+bool XrayBypass::readNameAt(int x, int y, int z, bool& stillOre)
+{
+    stillOre = true;   // conservative default: keep the mark on any failure
+    JNIEnv* env = Java::GetEnv();
+    CWorld* world = SDK::Minecraft ? SDK::Minecraft->theWorld : nullptr;
+    jobject worldObj = world ? world->GetInstance() : nullptr;
+    if (!env || !worldObj || !m_getBlockState || !m_blockPosCtor)
+        return false;
+
+    JniResolve::LocalFrame frame(env, 16);
+    if (!frame.env)
+        return false;
+
+    jobject bp = env->NewObject(m_blockPosClass, m_blockPosCtor, (jint)x, (jint)y, (jint)z);
+    if (!bp) { JniResolve::ClearException(env); return false; }
+    jobject state = env->CallObjectMethod(worldObj, m_getBlockState, bp);
+    JniResolve::ClearException(env);
+    env->DeleteLocalRef(bp);
+    if (!state)
+        return false;
+    jobject blockObj = env->CallObjectMethod(state, m_getBlock);
+    JniResolve::ClearException(env);
+    env->DeleteLocalRef(state);
+    if (!blockObj)
+        return false;
+
+    std::string name;
+    stillOre = matchBlock(blockObj, name);
+    env->DeleteLocalRef(blockObj);
+    return true;
+}
+
+void XrayBypass::probeStep(long long now)
+{
+    if (!CombatBridge::CanCombat() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
+        return;
+    if (!packetInit())
+        return;
+    if (m_probed.size() >= 4000)
+        return;
+
+    // a probe is in flight: after the wait, read the position back and abort
+    if (m_probeAwait)
+    {
+        if (now - m_probeSentMs < 150)
+            return;
+        m_probeAwait = false;
+
+        bool stillOre = true;
+        if (readNameAt(m_probeX, m_probeY, m_probeZ, stillOre) && !stillOre)
+        {
+            int removed = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_marksMutex);
+                for (auto it = m_marks.begin(); it != m_marks.end(); )
+                {
+                    if ((int)it->x == m_probeX && (int)it->y == m_probeY && (int)it->z == m_probeZ)
+                    {
+                        it = m_marks.erase(it);
+                        ++removed;
+                    }
+                    else
+                        ++it;
+                }
+            }
+            if (removed)
+                Logger::Info("XrayBypass", "probe: fake confirmed at "
+                    + std::to_string(m_probeX) + "," + std::to_string(m_probeY) + "," + std::to_string(m_probeZ)
+                    + " (removed " + std::to_string(removed) + ")");
+        }
+
+        sendDig(m_probeX, m_probeY, m_probeZ, false);   // ABORT — never break anything
+        return;
+    }
+
+    if (now - m_probeNextMs < (long long)std::max(100.0f, m_probeDelay->value))
+        return;
+
+    // pick the nearest unprobed mark within 24 blocks
+    const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
+    int bx = 0, by = 0, bz = 0;
+    float best = 24.0f * 24.0f;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        for (const BlockMark& m : m_marks)
+        {
+            const float dx = m.x + 0.5f - ppos.x;
+            const float dy = m.y + 0.5f - ppos.y;
+            const float dz = m.z + 0.5f - ppos.z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > best)
+                continue;
+            const std::array<int, 3> key{ (int)m.x, (int)m.y, (int)m.z };
+            if (m_probed.count(key))
+                continue;
+            best = d2;
+            bx = (int)m.x; by = (int)m.y; bz = (int)m.z;
+            found = true;
+        }
+    }
+    if (!found)
+        return;
+
+    m_probed.insert({ bx, by, bz });
+    if (sendDig(bx, by, bz, true))
+    {
+        m_probeX = bx; m_probeY = by; m_probeZ = bz;
+        m_probeSentMs = now;
+        m_probeAwait = true;
+        m_probeNextMs = now;
     }
 }
