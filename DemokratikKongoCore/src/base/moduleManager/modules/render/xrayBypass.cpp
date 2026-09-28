@@ -128,13 +128,21 @@ std::string XrayBypass::arrayListSuffix(SuffixDetail detail) const
 void XrayBypass::onEnable()
 {
     classInit();
-    resetScan();
+    {
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        m_marks.clear();
+        m_nextMarks.clear();
+    }
+    m_passDone = false;
+    m_lastScanMs = 0;   // first tick starts a fresh pass from the current position
+    m_lastStepMs = 0;
+    Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
 }
 
 void XrayBypass::onDisable()
 {
-    std::lock_guard<std::mutex> lock(m_marksMutex);
-    m_marks.clear();
+    // marks are intentionally kept for viewing after the one-shot scan ends
+    Logger::Info("XrayBypass", std::string("disabled (scan ") + (m_passDone ? "finished)" : "incomplete)"));
 }
 
 bool XrayBypass::classInit()
@@ -218,16 +226,65 @@ void XrayBypass::resetScan()
     m_nextMarks.clear();
 }
 
-// Cache of Block -> unlocalized name. Blocks are JVM singletons, so a
-// global-ref keyed map stays tiny and eliminates repeated string reads.
+// Block -> unlocalized name cache. Blocks are JVM singletons; local and
+// global jobject handles to the same object differ, so identity is compared
+// with IsSameObject instead of pointer equality.
+bool XrayBypass::resolveName(JNIEnv* env, jobject blockObj, std::string& outName)
+{
+    if (!env || !blockObj)
+        return false;
+
+    for (size_t i = 0; i < m_cacheRefs.size(); ++i)
+    {
+        if (m_cacheRefs[i] == blockObj || env->IsSameObject(m_cacheRefs[i], blockObj))
+        {
+            outName = m_cacheNames[i];
+            return true;
+        }
+    }
+
+    if (!m_getUnlocalizedName)
+    {
+        jclass blockCls = env->GetObjectClass(blockObj);
+        if (!blockCls)
+        {
+            JniResolve::ClearException(env);
+            return false;
+        }
+        m_getUnlocalizedName = JniResolve::Method(env, blockCls,
+            "()Ljava/lang/String;", "getUnlocalizedName");
+        env->DeleteLocalRef(blockCls);
+        if (!m_getUnlocalizedName)
+            return false;
+    }
+
+    jstring jname = (jstring)env->CallObjectMethod(blockObj, m_getUnlocalizedName);
+    if (JniResolve::ClearException(env), !jname)
+        return false;
+    const char* utf = env->GetStringUTFChars(jname, nullptr);
+    outName = utf ? utf : "";
+    if (utf)
+        env->ReleaseStringUTFChars(jname, utf);
+    env->DeleteLocalRef(jname);
+
+    jobject gref = env->NewGlobalRef(blockObj);
+    if (gref)
+    {
+        m_cacheRefs.push_back(gref);
+        m_cacheNames.push_back(outName);
+    }
+    return true;
+}
+
 bool XrayBypass::isAir(jobject blockObj)
 {
     if (!blockObj)
         return true;
-    const auto it = m_nameCache.find(blockObj);
-    if (it == m_nameCache.end())
+    JNIEnv* env = Java::GetEnv();
+    std::string name;
+    if (!resolveName(env, blockObj, name))
         return false;
-    return it->second == "tile.air";
+    return name == "tile.air";
 }
 
 bool XrayBypass::matchBlock(jobject blockObj, std::string& outName)
@@ -236,42 +293,19 @@ bool XrayBypass::matchBlock(jobject blockObj, std::string& outName)
         return false;
 
     std::string name;
-    auto it = m_nameCache.find(blockObj);
-    if (it != m_nameCache.end())
-    {
-        name = it->second;
-    }
-    else
-    {
-        JNIEnv* env = Java::GetEnv();
-        if (!env || !m_getUnlocalizedName)
-        {
-            jclass blockCls = env ? env->GetObjectClass(blockObj) : nullptr;
-            if (!blockCls)
-                return false;
-            m_getUnlocalizedName = JniResolve::Method(env, blockCls,
-                "()Ljava/lang/String;", "getUnlocalizedName");
-            env->DeleteLocalRef(blockCls);
-            if (!m_getUnlocalizedName)
-                return false;
-        }
-
-        jstring jname = (jstring)env->CallObjectMethod(blockObj, m_getUnlocalizedName);
-        if (JniResolve::ClearException(env), !jname)
-            return false;
-        const char* utf = env->GetStringUTFChars(jname, nullptr);
-        name = utf ? utf : "";
-        env->ReleaseStringUTFChars(jname, utf);
-        env->DeleteLocalRef(jname);
-
-        // promote the block object to a global ref so the cache key stays valid
-        jobject gref = env->NewGlobalRef(blockObj);
-        m_cacheRefs.push_back(gref);
-        m_nameCache.emplace(gref, name);
-    }
+    if (!resolveName(Java::GetEnv(), blockObj, name))
+        return false;
 
     if (name == "tile.air")
         return false;
+
+    // diagnostics: first distinct names seen (name-mapping sanity)
+    {
+        static std::set<std::string> s_seen;
+        if (s_seen.size() < 20 && s_seen.insert(name).second)
+            Logger::Info("XrayBypass", "block name: " + name);
+    }
+
     outName = name;
 
     if (m_allBlocks->value)
@@ -292,7 +326,12 @@ bool XrayBypass::matchBlock(jobject blockObj, std::string& outName)
         if (token.empty())
             continue;
         if (lower.find(lowerCopy(token)) != std::string::npos)
+        {
+            static std::set<std::string> s_seenMatch;
+            if (s_seenMatch.size() < 20 && s_seenMatch.insert(name).second)
+                Logger::Info("XrayBypass", "matched: " + name);
             return true;
+        }
     }
     return false;
 }
@@ -340,9 +379,10 @@ void XrayBypass::scanStep()
             m_marks.swap(m_nextMarks);
             m_nextMarks.clear();
             g_diag.summarize();
+            m_passDone = true;
             Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
-                + " blocks marked.");
-            m_passDone = true;   // onTick starts the next pass after ScanDelay
+                + " blocks marked. Auto-disabling (one-shot scan).");
+            setEnabled(false);   // re-enable to scan again from the new position
             return;
         }
 
@@ -464,12 +504,14 @@ void XrayBypass::onTick()
             + " sane=" + std::to_string(sane ? 1 : 0)
             + " combat=" + std::to_string(combat ? 1 : 0)
             + " marks=" + std::to_string(m_marks.size())
+            + " passDone=" + std::to_string(m_passDone ? 1 : 0)
             + " box=Y[" + std::to_string(m_minY) + ".." + std::to_string(m_maxY) + "]"
             + " X[" + std::to_string(m_minX) + ".." + std::to_string(m_maxX) + "]"
             + " cur=[" + std::to_string(m_cursorX) + "," + std::to_string(m_cursorY) + "," + std::to_string(m_cursorZ) + "]");
     }
 
-    if (!CombatBridge::InGame() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
+    if (!CombatBridge::CanCombat() || !CommonData::SanityCheck() ||
+        !SDK::Minecraft || !SDK::Minecraft->thePlayer)
     {
         std::lock_guard<std::mutex> lock(m_marksMutex);
         m_marks.clear();
@@ -502,14 +544,11 @@ void XrayBypass::onTick()
     const bool outsideBox =
         ppos.x < static_cast<float>(m_minX - 8) || ppos.x > static_cast<float>(m_maxX + 8) ||
         ppos.z < static_cast<float>(m_minZ - 8) || ppos.z > static_cast<float>(m_maxZ + 8);
-    const long long scanDelayMs = std::max<long long>(200, static_cast<long long>(m_scanDelay->value));
-
-    // A pass is atomic: the cursor runs to completion with no periodic resets.
-    // A new pass starts only when the player left the box (recenter), on first
-    // tick, or after the previous pass finished and ScanDelay elapsed.
+    // One-shot flow: a pass is atomic (cursor runs to completion, no periodic
+    // resets) and starts on the first tick after enable or when the player
+    // left the previous box. When it finishes, the module auto-disables.
     const bool firstEver = (m_lastScanMs == 0);
-    const bool afterDone = m_passDone && (now - m_lastScanMs >= scanDelayMs);
-    if (outsideBox || firstEver || afterDone)
+    if (outsideBox || firstEver)
     {
         m_lastScanMs = now;
         m_passDone = false;
@@ -527,7 +566,7 @@ void XrayBypass::onTick()
 
 void XrayBypass::onRender2D()
 {
-    if (m_marks.empty() || !CombatBridge::InGame())
+    if (m_marks.empty())
         return;
 
     const CommonData::RenderState rs = CommonData::GetRenderState();
