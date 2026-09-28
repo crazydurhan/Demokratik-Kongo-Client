@@ -461,11 +461,27 @@ void XrayBypass::onTick()
     const long long now = nowMs();
 
     // full rescan cadence + player moved far from scan origin
+    // one-time settings dump per world session — catches config garbage
+    static long long s_lastDump = -60000;
+    if (nowMs() - s_lastDump >= 60000)
+    {
+        s_lastDump = nowMs();
+        Logger::Info("XrayBypass", "settings: RangeXZ=" + std::to_string(m_rangeXZ->value)
+            + " UP=" + std::to_string(m_expandUp->value)
+            + " DOWN=" + std::to_string(m_expandDown->value)
+            + " Delay=" + std::to_string(m_delay->value)
+            + " ScanDelay=" + std::to_string(m_scanDelay->value)
+            + " allBlocks=" + std::to_string(m_allBlocks->value ? 1 : 0)
+            + " smart=" + std::to_string(m_smartScan->value ? 1 : 0)
+            + " wl=" + m_whitelist->value);
+    }
+
     const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
     const bool outsideBox =
         ppos.x < static_cast<float>(m_minX - 8) || ppos.x > static_cast<float>(m_maxX + 8) ||
         ppos.z < static_cast<float>(m_minZ - 8) || ppos.z > static_cast<float>(m_maxZ + 8);
-    const bool rescan = now - m_lastScanMs >= static_cast<long long>(m_scanDelay->value)
+    const long long scanDelayMs = std::max<long long>(200, static_cast<long long>(m_scanDelay->value));
+    const bool rescan = now - m_lastScanMs >= scanDelayMs
                         || outsideBox
                         || m_lastScanMs == 0;
     if (rescan)
@@ -475,7 +491,8 @@ void XrayBypass::onTick()
     }
 
     // Delay setting spaces out scan steps across game ticks
-    if (now - m_lastStepMs < static_cast<long long>(m_delay->value * 50.0f))
+    const long long stepGateMs = std::max<long long>(50, static_cast<long long>(m_delay->value * 50.0f));
+    if (now - m_lastStepMs < stepGateMs)
         return;
     m_lastStepMs = now;
 
