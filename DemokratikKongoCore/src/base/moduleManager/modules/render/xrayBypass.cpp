@@ -410,6 +410,17 @@ void XrayBypass::scanStep()
 
 void XrayBypass::onTick()
 {
+    // periodic state heartbeat so a stuck pipeline is visible in the log
+    static long long s_lastBeat = 0;
+    const long long nowBeat = nowMs();
+    if (nowBeat - s_lastBeat >= 5000)
+    {
+        s_lastBeat = nowBeat;
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        Logger::Info("XrayBypass", "state: inGame=" + std::to_string(CombatBridge::InGame() ? 1 : 0)
+            + " marks=" + std::to_string(m_marks.size()));
+    }
+
     if (!CombatBridge::InGame() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
     {
         std::lock_guard<std::mutex> lock(m_marksMutex);
