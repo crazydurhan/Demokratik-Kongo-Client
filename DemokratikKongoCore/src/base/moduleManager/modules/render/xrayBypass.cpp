@@ -417,7 +417,14 @@ void XrayBypass::onTick()
     {
         s_lastBeat = nowBeat;
         std::lock_guard<std::mutex> lock(m_marksMutex);
-        Logger::Info("XrayBypass", "state: inGame=" + std::to_string(CombatBridge::InGame() ? 1 : 0)
+        const bool inGame = CombatBridge::InGame();
+        const bool gui = SDK::Minecraft && SDK::Minecraft->IsInGuiState();
+        const bool sane = CommonData::SanityCheck();
+        const bool combat = CombatBridge::CanCombat();
+        Logger::Info("XrayBypass", "state: inGame=" + std::to_string(inGame ? 1 : 0)
+            + " guiOpen=" + std::to_string(gui ? 1 : 0)
+            + " sane=" + std::to_string(sane ? 1 : 0)
+            + " combat=" + std::to_string(combat ? 1 : 0)
             + " marks=" + std::to_string(m_marks.size()));
     }
 
