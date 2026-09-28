@@ -598,8 +598,15 @@ void XrayBypass::onRender2D()
                      marks.empty() ? 0.0f : marks.front().y,
                      marks.empty() ? 0.0f : marks.front().z },
             rs.modelView, rs.projection, sw, sh, probe);
+        Vector2 cam;
+        const bool camOk = CWorldToScreen::WorldToScreenVisible(
+            rs.renderPos, rs.modelView, rs.projection, sw, sh, cam);
         Logger::Info("XrayBypass", "render diag: mv.m00=" + std::to_string(rs.modelView.m00)
             + " proj.m00=" + std::to_string(rs.projection.m00)
+            + " camPos=" + std::to_string(rs.renderPos.x) + "," + std::to_string(rs.renderPos.y)
+            + "," + std::to_string(rs.renderPos.z)
+            + " camProbe=" + (camOk ? (std::to_string(cam.x) + "," + std::to_string(cam.y)) : "off")
+            + " center=" + std::to_string(sw / 2) + "," + std::to_string(sh / 2)
             + " marks=" + std::to_string(marks.size())
             + " probeW2S=" + std::to_string(probed ? 1 : 0)
             + (probed ? (" -> " + std::to_string(probe.x) + "," + std::to_string(probe.y)) : std::string()));
