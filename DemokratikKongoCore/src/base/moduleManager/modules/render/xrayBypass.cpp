@@ -589,9 +589,26 @@ void XrayBypass::onRender2D()
     // diagnostics: matrix + projection sanity, once per 5s (no JNI here —
     // this runs on the render thread, data comes from CommonData cache)
     static long long s_lastDrawDiag = 0;
+    static bool s_dumpedFull = false;
     if (nowMs() - s_lastDrawDiag > 5000)
     {
         s_lastDrawDiag = nowMs();
+        if (!s_dumpedFull && !marks.empty())
+        {
+            s_dumpedFull = true;
+            const Matrix& mv = rs.modelView;
+            const Matrix& pj = rs.projection;
+            Logger::Info("XrayBypass", "MV: " + std::to_string(mv.m00) + " " + std::to_string(mv.m01) + " " + std::to_string(mv.m02) + " " + std::to_string(mv.m03)
+                + " | " + std::to_string(mv.m10) + " " + std::to_string(mv.m11) + " " + std::to_string(mv.m12) + " " + std::to_string(mv.m13)
+                + " | " + std::to_string(mv.m20) + " " + std::to_string(mv.m21) + " " + std::to_string(mv.m22) + " " + std::to_string(mv.m23)
+                + " | " + std::to_string(mv.m30) + " " + std::to_string(mv.m31) + " " + std::to_string(mv.m32) + " " + std::to_string(mv.m33));
+            Logger::Info("XrayBypass", "PJ: " + std::to_string(pj.m00) + " " + std::to_string(pj.m01) + " " + std::to_string(pj.m02) + " " + std::to_string(pj.m03)
+                + " | " + std::to_string(pj.m10) + " " + std::to_string(pj.m11) + " " + std::to_string(pj.m12) + " " + std::to_string(pj.m13)
+                + " | " + std::to_string(pj.m20) + " " + std::to_string(pj.m21) + " " + std::to_string(pj.m22) + " " + std::to_string(pj.m23)
+                + " | " + std::to_string(pj.m30) + " " + std::to_string(pj.m31) + " " + std::to_string(pj.m32) + " " + std::to_string(pj.m33));
+            Logger::Info("XrayBypass", "mark0=" + std::to_string(marks.front().x) + "," + std::to_string(marks.front().y) + "," + std::to_string(marks.front().z)
+                + " camPos=" + std::to_string(rs.renderPos.x) + "," + std::to_string(rs.renderPos.y) + "," + std::to_string(rs.renderPos.z));
+        }
         Vector2 probe;
         const bool probed = CWorldToScreen::WorldToScreenVisible(
             Vector3{ marks.empty() ? 0.0f : marks.front().x,
