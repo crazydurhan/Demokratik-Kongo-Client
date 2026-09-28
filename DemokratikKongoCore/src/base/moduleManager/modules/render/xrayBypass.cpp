@@ -36,6 +36,42 @@ namespace
         return IM_COL32(180, 180, 180, 255);
     }
 
+    struct ScanDiag
+    {
+        int bpFail = 0, stateFail = 0, blockFail = 0, noMatch = 0, matched = 0, processed = 0;
+        bool bpExLogged = false, stateExLogged = false, blockExLogged = false;
+
+        void logException(JNIEnv* env, const char* stage, bool& logged)
+        {
+            if (logged || !env || !env->ExceptionCheck()) return;
+            logged = true;
+            jthrowable ex = env->ExceptionOccurred();
+            if (!ex) return;
+            jclass exCls = env->GetObjectClass(ex);
+            jmethodID toStr = env->GetMethodID(exCls, "toString", "()Ljava/lang/String;");
+            if (jstring msg = (jstring)env->CallObjectMethod(ex, toStr))
+            {
+                const char* u = env->GetStringUTFChars(msg, nullptr);
+                Logger::Error("XrayBypass", std::string(stage) + " failed: " + (u ? u : "?"));
+                env->ReleaseStringUTFChars(msg, u);
+                env->DeleteLocalRef(msg);
+            }
+            env->DeleteLocalRef(exCls);
+            env->DeleteLocalRef(ex);
+        }
+        void summarize()
+        {
+            Logger::Info("XrayBypass",
+                "diag: processed=" + std::to_string(processed)
+                + " bpFail=" + std::to_string(bpFail)
+                + " stateFail=" + std::to_string(stateFail)
+                + " blockFail=" + std::to_string(blockFail)
+                + " noMatch=" + std::to_string(noMatch)
+                + " matched=" + std::to_string(matched));
+        }
+    };
+    ScanDiag g_diag;
+
     inline long long nowMs()
     {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -265,16 +301,17 @@ void XrayBypass::scanStep()
     if (!frame.env)
         return;
 
-    int processed = 0;
     const bool smart = m_smartScan->value;
+    g_diag = ScanDiag{};
 
-    while (processed < kBlocksPerStep)
+    while (g_diag.processed < kBlocksPerStep)
     {
         if (m_cursorY > m_maxY)  // sweep finished
         {
             std::lock_guard<std::mutex> lock(m_marksMutex);
             m_marks.swap(m_nextMarks);
             m_nextMarks.clear();
+            g_diag.summarize();
             Logger::Info("XrayBypass", "Sweep done — " + std::to_string(m_marks.size())
                 + " blocks marked.");
             resetScan();   // starts the next pass
@@ -296,21 +333,35 @@ void XrayBypass::scanStep()
 
         jobject bp = env->NewObject(m_blockPosClass, m_blockPosCtor,
             (jint)x, (jint)y, (jint)z);
-        if (!bp) { JniResolve::ClearException(env); continue; }
+        if (!bp) { g_diag.bpFail++; g_diag.logException(env, "BlockPos ctor", g_diag.bpExLogged); JniResolve::ClearException(env); continue; }
+        ++g_diag.processed;
 
         jobject state = env->CallObjectMethod(worldObj, m_getBlockState, bp);
-        JniResolve::ClearException(env);
+        if (env->ExceptionCheck())
+        {
+            g_diag.stateFail++;
+            g_diag.logException(env, "getBlockState", g_diag.stateExLogged);
+            JniResolve::ClearException(env);
+            env->DeleteLocalRef(bp);
+            continue;
+        }
         env->DeleteLocalRef(bp);
-        if (!state) continue;
+        if (!state) { g_diag.stateFail++; continue; }
 
         jobject blockObj = env->CallObjectMethod(state, m_getBlock);
-        JniResolve::ClearException(env);
+        if (env->ExceptionCheck())
+        {
+            g_diag.blockFail++;
+            g_diag.logException(env, "getBlock", g_diag.blockExLogged);
+            JniResolve::ClearException(env);
+        }
         env->DeleteLocalRef(state);
-        if (!blockObj) { env->DeleteLocalRef(blockObj); continue; }
+        if (!blockObj) continue;
 
         std::string matchedName;
         if (matchBlock(blockObj, matchedName))
         {
+            ++g_diag.matched;
             // SmartScan: only ores with at least one air neighbor — those are
             // genuinely visible and never obfuscated by anti-xray.
             bool exposed = true;
@@ -353,7 +404,7 @@ void XrayBypass::scanStep()
             }
         }
         env->DeleteLocalRef(blockObj);
-        ++processed;
+        ++g_diag.processed;
     }
 }
 
