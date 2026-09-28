@@ -14,7 +14,9 @@
 #include <cstring>
 #include <cctype>
 #include <cmath>
+#include <array>
 #include <mutex>
+#include <set>
 
 #include "../../../util/logger.h"
 
@@ -107,6 +109,8 @@ XrayBypass::XrayBypass()
     m_scanDelay->visible = [this]{ return m_smartScan->value; };
 
     m_allBlocks = &add<BoolSetting>("AllBlocks", false);
+    m_verifyOn = &add<BoolSetting>("Verify", true);
+    m_onlyReal = &add<BoolSetting>("OnlyReal", false);
     m_mode = &add<EnumSetting>("Mode", std::vector<const char*>{ "Outline", "Fill" }, 0);
     m_whitelist = &add<StringSetting>("Whitelist", "diamond,emerald,iron,gold,redstone,lapis,coal,quartz");
     m_whitelist->itemList = true;
@@ -136,6 +140,7 @@ void XrayBypass::onEnable()
     m_passDone = false;
     m_lastScanMs = 0;   // first tick starts a fresh pass from the current position
     m_lastStepMs = 0;
+    m_lastVerifyMs = 0;
     Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
 }
 
@@ -380,9 +385,17 @@ void XrayBypass::scanStep()
             m_nextMarks.clear();
             g_diag.summarize();
             m_passDone = true;
-            Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
-                + " blocks marked. Auto-disabling (one-shot scan).");
-            setEnabled(false);   // re-enable to scan again from the new position
+            if (m_verifyOn->value)
+            {
+                Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
+                    + " blocks marked. Verify mode: proximity re-check active, fakes will drop as you dig.");
+            }
+            else
+            {
+                Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
+                    + " blocks marked. Auto-disabling (one-shot scan).");
+                setEnabled(false);   // re-enable to scan again from the new position
+            }
             return;
         }
 
@@ -466,7 +479,7 @@ void XrayBypass::scanStep()
                 std::lock_guard<std::mutex> lock(m_marksMutex);
                 m_nextMarks.push_back(BlockMark{
                     static_cast<float>(x), static_cast<float>(y),
-                    static_cast<float>(z), col });
+                    static_cast<float>(z), col, exposed });
                 if (m_nextMarks.size() > 8000)
                     m_nextMarks.erase(m_nextMarks.begin());
             }
@@ -524,6 +537,17 @@ void XrayBypass::onTick()
 
     const long long now = nowMs();
 
+    if (m_passDone)
+    {
+        // one-shot scan finished — only proximity verification runs now
+        if (m_verifyOn->value && now - m_lastVerifyMs >= 2000)
+        {
+            m_lastVerifyMs = now;
+            verifyStep();
+        }
+        return;
+    }
+
     // full rescan cadence + player moved far from scan origin
     // one-time settings dump per world session — catches config garbage
     static long long s_lastDump = -60000;
@@ -537,6 +561,8 @@ void XrayBypass::onTick()
             + " ScanDelay=" + std::to_string(m_scanDelay->value)
             + " allBlocks=" + std::to_string(m_allBlocks->value ? 1 : 0)
             + " smart=" + std::to_string(m_smartScan->value ? 1 : 0)
+            + " verify=" + std::to_string(m_verifyOn->value ? 1 : 0)
+            + " onlyReal=" + std::to_string(m_onlyReal->value ? 1 : 0)
             + " wl=" + m_whitelist->value);
     }
 
@@ -562,6 +588,114 @@ void XrayBypass::onTick()
     m_lastStepMs = now;
 
     scanStep();
+}
+
+void XrayBypass::verifyStep()
+{
+    JNIEnv* env = Java::GetEnv();
+    CWorld* world = SDK::Minecraft ? SDK::Minecraft->theWorld : nullptr;
+    jobject worldObj = world ? world->GetInstance() : nullptr;
+    if (!env || !worldObj || !m_getBlockState || !m_blockPosCtor || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
+        return;
+
+    const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
+    const float R2  = 16.0f * 16.0f;
+    const float R62 = 6.0f * 6.0f;
+
+    // collect nearby marks under the lock, then do the JNI reads outside of it
+    std::vector<std::array<int, 3>> candidates;
+    {
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        candidates.reserve(256);
+        for (const BlockMark& m : m_marks)
+        {
+            const float dx = m.x + 0.5f - ppos.x;
+            const float dy = m.y + 0.5f - ppos.y;
+            const float dz = m.z + 0.5f - ppos.z;
+            if (dx * dx + dy * dy + dz * dz <= R2)
+                candidates.push_back({ (int)m.x, (int)m.y, (int)m.z });
+            if (candidates.size() >= 400)
+                break;
+        }
+    }
+    if (candidates.empty())
+        return;
+
+    JniResolve::LocalFrame frame(env, 64);
+    if (!frame.env)
+        return;
+
+    std::vector<std::array<int, 3>> fakes, confirmed;
+    int checked = 0;
+    for (const auto& c : candidates)
+    {
+        jobject bp = env->NewObject(m_blockPosClass, m_blockPosCtor, (jint)c[0], (jint)c[1], (jint)c[2]);
+        if (!bp) { JniResolve::ClearException(env); continue; }
+        jobject state = env->CallObjectMethod(worldObj, m_getBlockState, bp);
+        JniResolve::ClearException(env);
+        env->DeleteLocalRef(bp);
+        if (!state) continue;
+        jobject blockObj = env->CallObjectMethod(state, m_getBlock);
+        JniResolve::ClearException(env);
+        env->DeleteLocalRef(state);
+        if (!blockObj) continue;
+
+        // The server rewrites hidden fake blocks to their real value once the
+        // player's area gets updated (digging next to them). Re-reading tells
+        // fake from real: no longer a whitelisted ore == it was fake.
+        std::string name;
+        const bool stillOre = matchBlock(blockObj, name);
+        env->DeleteLocalRef(blockObj);
+
+        const float dx = (float)c[0] + 0.5f - ppos.x;
+        const float dy = (float)c[1] + 0.5f - ppos.y;
+        const float dz = (float)c[2] + 0.5f - ppos.z;
+        const bool close = (dx * dx + dy * dy + dz * dz) <= R62;
+
+        if (!stillOre)
+            fakes.push_back(c);
+        else if (close)
+            confirmed.push_back(c);
+        ++checked;
+    }
+    if (checked == 0)
+        return;
+
+    auto inList = [](const std::vector<std::array<int, 3>>& v, const BlockMark& m)
+    {
+        for (const auto& c : v)
+            if (c[0] == (int)m.x && c[1] == (int)m.y && c[2] == (int)m.z)
+                return true;
+        return false;
+    };
+
+    int removed = 0, verified = 0;
+    size_t left = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        for (auto it = m_marks.begin(); it != m_marks.end(); )
+        {
+            if (!fakes.empty() && inList(fakes, *it))
+            {
+                it = m_marks.erase(it);
+                ++removed;
+                continue;
+            }
+            if (!it->verified && !confirmed.empty() && inList(confirmed, *it))
+            {
+                it->verified = true;
+                ++verified;
+            }
+            ++it;
+        }
+        left = m_marks.size();
+    }
+
+    if (removed || verified)
+        Logger::Info("XrayBypass", "verify: removed " + std::to_string(removed)
+            + " fake, confirmed " + std::to_string(verified)
+            + " real (" + std::to_string(checked) + " checked, "
+            + std::to_string(left) + " marks left)");
 }
 
 void XrayBypass::onRender2D()
@@ -631,6 +765,9 @@ void XrayBypass::onRender2D()
     const Vector3 cam = rs.camPos;
     for (const BlockMark& m : marks)
     {
+        if (m_onlyReal->value && !m.verified)
+            continue;
+
         // camera-relative corners: modelView is rotation-only
         Vector3 corners[8] = {
             { m.x     - cam.x, m.y     - cam.y, m.z     - cam.z },
@@ -675,7 +812,11 @@ void XrayBypass::onRender2D()
                 dl->AddQuadFilled(pts[i], pts[i + 4], pts[(i + 1) % 4 + 4], pts[(i + 1) % 4], fillColor);
         }
 
+        // unverified (possibly fake) marks draw dimmed so real ones stand out
+        const ImU32 lineCol = m.verified
+            ? m.color
+            : ((m.color & 0x00FFFFFFu) | (110u << 24));
         for (const auto& e : edges)
-            dl->AddLine(pts[e[0]], pts[e[1]], m.color, 1.4f);
+            dl->AddLine(pts[e[0]], pts[e[1]], lineCol, 1.4f);
     }
 }

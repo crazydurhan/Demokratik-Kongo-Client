@@ -31,10 +31,12 @@ private:
     {
         float x = 0.0f, y = 0.0f, z = 0.0f;
         unsigned int color = 0;
+        bool verified = false;   // exposed at scan, or confirmed by proximity re-check
     };
 
     void resetScan();
     void scanStep();
+    void verifyStep();
     bool classInit();
 
     bool resolveName(JNIEnv* env, jobject blockObj, std::string& outName);
@@ -48,6 +50,8 @@ private:
     BoolSetting*   m_smartScan = nullptr;    // exposed ores only
     NumberSetting* m_scanDelay = nullptr;    // ms between full rescans
     BoolSetting*   m_allBlocks = nullptr;
+    BoolSetting*   m_verifyOn = nullptr;     // proximity re-check removes fake blocks
+    BoolSetting*   m_onlyReal = nullptr;     // render only confirmed-real marks
     EnumSetting*   m_mode = nullptr;         // Outline / Fill
     StringSetting* m_whitelist = nullptr;    // comma list, substring match
     ColorSetting*  m_color = nullptr;
@@ -57,6 +61,7 @@ private:
     int m_minX = 0, m_maxX = 0, m_minY = 0, m_maxY = 0, m_minZ = 0, m_maxZ = 0;
     long long m_lastScanMs = 0;
     long long m_lastStepMs = 0;
+    long long m_lastVerifyMs = 0;
     bool m_passDone = false;
     Vector3 m_scanOrigin{};
 
