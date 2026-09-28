@@ -316,6 +316,15 @@ void XrayBypass::scanStep()
         return;
     }
 
+    {
+        static long long s_lastEntry = 0;
+        if (nowMs() - s_lastEntry > 5000)
+        {
+            s_lastEntry = nowMs();
+            Logger::Info("XrayBypass", "scanStep entered, budget per step=" + std::to_string(kBlocksPerStep));
+        }
+    }
+
     JniResolve::LocalFrame frame(env, 64);
     if (!frame.env)
         return;
@@ -425,6 +434,16 @@ void XrayBypass::scanStep()
         env->DeleteLocalRef(blockObj);
         ++g_diag.processed;
     }
+
+    {
+        static long long s_lastBudget = 0;
+        if (nowMs() - s_lastBudget > 5000)
+        {
+            s_lastBudget = nowMs();
+            Logger::Info("XrayBypass", "step budget exhausted, cursor now Y=" + std::to_string(m_cursorY)
+                + " X=" + std::to_string(m_cursorX) + " Z=" + std::to_string(m_cursorZ));
+        }
+    }
 }
 
 void XrayBypass::onTick()
@@ -444,7 +463,10 @@ void XrayBypass::onTick()
             + " guiOpen=" + std::to_string(gui ? 1 : 0)
             + " sane=" + std::to_string(sane ? 1 : 0)
             + " combat=" + std::to_string(combat ? 1 : 0)
-            + " marks=" + std::to_string(m_marks.size()));
+            + " marks=" + std::to_string(m_marks.size())
+            + " box=Y[" + std::to_string(m_minY) + ".." + std::to_string(m_maxY) + "]"
+            + " X[" + std::to_string(m_minX) + ".." + std::to_string(m_maxX) + "]"
+            + " cur=[" + std::to_string(m_cursorX) + "," + std::to_string(m_cursorY) + "," + std::to_string(m_cursorZ) + "]");
     }
 
     if (!CombatBridge::InGame() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
