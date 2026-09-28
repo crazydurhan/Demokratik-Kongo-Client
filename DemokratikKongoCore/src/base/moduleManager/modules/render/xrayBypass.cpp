@@ -112,9 +112,12 @@ XrayBypass::XrayBypass()
     m_verifyOn = &add<BoolSetting>("Verify", true);
     m_onlyReal = &add<BoolSetting>("OnlyReal", false);
     m_packetScan = &add<BoolSetting>("PacketScan", false);
-    m_probeDelay = &add<NumberSetting>("ProbeDelay", 200.0f, 100.0f, 2000.0f, 50.0f);
+    m_probeDelay = &add<NumberSetting>("ProbeDelay", 150.0f, 100.0f, 2000.0f, 50.0f);
     m_probeDelay->suffix = " ms";
     m_probeDelay->visible = [this]{ return m_packetScan->value; };
+    m_probeRange = &add<NumberSetting>("ProbeRange", 32.0f, 8.0f, 128.0f, 4.0f);
+    m_probeRange->suffix = " blk";
+    m_probeRange->visible = [this]{ return m_packetScan->value; };
     m_mode = &add<EnumSetting>("Mode", std::vector<const char*>{ "Outline", "Fill" }, 0);
     m_whitelist = &add<StringSetting>("Whitelist", "diamond,emerald,iron,gold,redstone,lapis,coal,quartz");
     m_whitelist->itemList = true;
@@ -148,6 +151,10 @@ void XrayBypass::onEnable()
     m_probeAwait = false;
     m_probeNextMs = 0;
     m_probed.clear();
+    m_probeSentCount = 0;
+    m_probeRemovedCount = 0;
+    m_probeIdleLogged = false;
+    m_probeCapLogged = false;
     Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
 }
 
@@ -573,6 +580,7 @@ void XrayBypass::onTick()
             + " verify=" + std::to_string(m_verifyOn->value ? 1 : 0)
             + " onlyReal=" + std::to_string(m_onlyReal->value ? 1 : 0)
             + " packetScan=" + std::to_string(m_packetScan->value ? 1 : 0)
+            + " probeRange=" + std::to_string((int)m_probeRange->value)
             + " wl=" + m_whitelist->value);
     }
 
@@ -1200,7 +1208,14 @@ void XrayBypass::probeStep(long long now)
     if (!packetInit())
         return;
     if (m_probed.size() >= 4000)
+    {
+        if (!m_probeCapLogged)
+        {
+            m_probeCapLogged = true;
+            Logger::Info("XrayBypass", "probe: session cap reached (4000). Re-enable the module to reset.");
+        }
         return;
+    }
 
     // a probe is in flight: after the wait, read the position back and abort
     if (m_probeAwait)
@@ -1227,9 +1242,12 @@ void XrayBypass::probeStep(long long now)
                 }
             }
             if (removed)
+            {
+                m_probeRemovedCount += removed;
                 Logger::Info("XrayBypass", "probe: fake confirmed at "
                     + std::to_string(m_probeX) + "," + std::to_string(m_probeY) + "," + std::to_string(m_probeZ)
                     + " (removed " + std::to_string(removed) + ")");
+            }
         }
 
         sendDig(m_probeX, m_probeY, m_probeZ, false);   // ABORT — never break anything
@@ -1239,10 +1257,11 @@ void XrayBypass::probeStep(long long now)
     if (now - m_probeNextMs < (long long)std::max(100.0f, m_probeDelay->value))
         return;
 
-    // pick the nearest unprobed mark within 24 blocks
+    // pick the nearest unprobed mark within ProbeRange (not only close marks)
     const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
     int bx = 0, by = 0, bz = 0;
-    float best = 24.0f * 24.0f;
+    const float probeR = std::max(8.0f, m_probeRange->value);
+    float best = probeR * probeR;
     bool found = false;
     {
         std::lock_guard<std::mutex> lock(m_marksMutex);
@@ -1263,7 +1282,16 @@ void XrayBypass::probeStep(long long now)
         }
     }
     if (!found)
+    {
+        if (!m_probeIdleLogged)
+        {
+            m_probeIdleLogged = true;
+            Logger::Info("XrayBypass", "probe: idle — every mark within " + std::to_string((int)probeR)
+                + " blocks has been probed (sent=" + std::to_string(m_probeSentCount)
+                + " removed=" + std::to_string(m_probeRemovedCount) + ")");
+        }
         return;
+    }
 
     m_probed.insert({ bx, by, bz });
     if (sendDig(bx, by, bz, true))
@@ -1272,5 +1300,10 @@ void XrayBypass::probeStep(long long now)
         m_probeSentMs = now;
         m_probeAwait = true;
         m_probeNextMs = now;
+        m_probeIdleLogged = false;
+        ++m_probeSentCount;
+        if (m_probeSentCount % 20 == 0)
+            Logger::Info("XrayBypass", "probe progress: sent=" + std::to_string(m_probeSentCount)
+                + " removed=" + std::to_string(m_probeRemovedCount));
     }
 }

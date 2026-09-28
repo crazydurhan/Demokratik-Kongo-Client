@@ -61,6 +61,7 @@ private:
     BoolSetting*   m_onlyReal = nullptr;     // render only confirmed-real marks
     BoolSetting*   m_packetScan = nullptr;   // dig-probe packets (server re-sends real blocks)
     NumberSetting* m_probeDelay = nullptr;   // ms between probes
+    NumberSetting* m_probeRange = nullptr;   // probe reach, blocks (not only close marks)
     EnumSetting*   m_mode = nullptr;         // Outline / Fill
     StringSetting* m_whitelist = nullptr;    // comma list, substring match
     ColorSetting*  m_color = nullptr;
@@ -87,6 +88,10 @@ private:
     long long m_probeNextMs = 0;
     int       m_probeX = 0, m_probeY = 0, m_probeZ = 0;
     std::set<std::array<int, 3>> m_probed;
+    int       m_probeSentCount = 0;
+    int       m_probeRemovedCount = 0;
+    bool      m_probeIdleLogged = false;
+    bool      m_probeCapLogged = false;
     Vector3 m_scanOrigin{};
 
     std::vector<BlockMark> m_marks;          // render thread reads
