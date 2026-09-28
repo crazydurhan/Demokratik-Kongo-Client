@@ -586,6 +586,26 @@ void XrayBypass::onRender2D()
         marks = m_marks;
     }
 
+    // diagnostics: matrix + projection sanity, once per 5s (no JNI here —
+    // this runs on the render thread, data comes from CommonData cache)
+    static long long s_lastDrawDiag = 0;
+    if (nowMs() - s_lastDrawDiag > 5000)
+    {
+        s_lastDrawDiag = nowMs();
+        Vector2 probe;
+        const bool probed = CWorldToScreen::WorldToScreenVisible(
+            Vector3{ marks.empty() ? 0.0f : marks.front().x,
+                     marks.empty() ? 0.0f : marks.front().y,
+                     marks.empty() ? 0.0f : marks.front().z },
+            rs.modelView, rs.projection, sw, sh, probe);
+        Logger::Info("XrayBypass", "render diag: mv.m00=" + std::to_string(rs.modelView.m00)
+            + " proj.m00=" + std::to_string(rs.projection.m00)
+            + " marks=" + std::to_string(marks.size())
+            + " probeW2S=" + std::to_string(probed ? 1 : 0)
+            + (probed ? (" -> " + std::to_string(probe.x) + "," + std::to_string(probe.y)) : std::string()));
+    }
+
+
     for (const BlockMark& m : marks)
     {
         Vector3 corners[8] = {

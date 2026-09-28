@@ -23,8 +23,7 @@ void Base::RenderLoop()
     if (!CommonData::DataUpdated())
         return;
 
-    if (CommonData::inGui)
-        return;
-
+    // Overlays also render while a screen (ClickGUI, chat, inventory) is open:
+    // the menu is drawn after this pass, so module overlays stay behind it.
     ModuleManager::OnRender2D();
 }
