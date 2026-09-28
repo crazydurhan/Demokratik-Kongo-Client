@@ -342,6 +342,10 @@ void ModuleManager::OnRender3D(float partialTicks)
     //
     // This fires every frame, so any module leaking a single local ref would
     // overflow the reference table within seconds; the frame bounds the leak.
+    // Matrices read during the world pass are the real camera transform;
+    // a tick-phase read can catch a different GL phase and shift boxes.
+    CommonData::RefreshRenderState();
+
     JniResolve::LocalFrame frame(Java::GetEnv(), 128);
 
     // Hold the storage lock during dispatch (see g_modulesMutex note).
