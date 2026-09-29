@@ -166,6 +166,9 @@ void XrayBypass::onEnable()
     m_probeRemovedCount = 0;
     m_probeIdleLogged = false;
     m_probeCapLogged = false;
+    m_packetInitFailed = false;
+    m_packetInitWarned = false;
+    m_nextPacketInitMs = 0;
     Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
 }
 
@@ -1042,20 +1045,26 @@ namespace
 
 bool XrayBypass::packetInit()
 {
-    if (m_c07Ctor && m_addToSendQueue && m_sendQueueField && m_actionStart && m_actionAbort && m_facingUp)
+    if (m_c07Class && m_c07Ctor && m_addToSendQueue && m_sendQueueField &&
+        m_actionStart && m_actionAbort && m_facingUp)
         return true;
-    if (m_packetInitFailed)
-        return false;
 
     JNIEnv* env = Java::GetEnv();
     if (!env)
         return false;
 
+    // A module is a process-lifetime singleton, so a single transient failure
+    // -- enabled before the world or its classes are ready -- used to disable
+    // PacketScan for the whole session. Retry on a timer instead of latching.
+    const long long now = nowMs();
+    if (now < m_nextPacketInitMs)
+        return false;
+    m_nextPacketInitMs = now + kPacketInitRetryMs;
+    m_packetInitFailed = false;
+
     JniResolve::LocalFrame frame(env, 96);
     if (!frame.env)
         return false;
-
-    m_packetInitFailed = true;   // set false again on success
 
     // --- C07 class via the alias table ---
     if (!Java::AssignClass("net/minecraft/network/play/client/C07PacketPlayerDigging", m_c07Class))
@@ -1239,12 +1248,20 @@ bool XrayBypass::packetInit()
         }
     }
 
-    m_packetInitFailed = !(m_sendQueueField && m_addToSendQueue &&
-                           m_c07Ctor && m_actionStart && m_actionAbort && m_facingUp);
+    m_packetInitFailed = !(m_sendQueueField && m_addToSendQueue && m_c07Ctor &&
+                           m_actionStart && m_actionAbort && m_facingUp);
     if (!m_packetInitFailed)
+    {
         Logger::Info("XrayBypass", "PacketScan ready: C07 dig-probe initialized.");
-    else
-        Logger::Warn("XrayBypass", "PacketScan init failed (ctor/field/method resolution).");
+    }
+    else if (!m_packetInitWarned)
+    {
+        // Log the first failure only: init now retries every
+        // kPacketInitRetryMs, and a warn per attempt would flood the log on a
+        // client where the packet path is simply unavailable.
+        m_packetInitWarned = true;
+        Logger::Warn("XrayBypass", "PacketScan init failed (ctor/field/method resolution), retrying.");
+    }
     return !m_packetInitFailed;
 }
 

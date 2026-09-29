@@ -98,6 +98,8 @@ private:
     jobject   m_actionAbort = nullptr;
     jobject   m_facingUp = nullptr;
     bool      m_packetInitFailed = false;
+    bool      m_packetInitWarned = false;
+    long long m_nextPacketInitMs = 0;
     bool      m_probeAwait = false;
     long long m_probeSentMs = 0;
     long long m_probeNextMs = 0;
