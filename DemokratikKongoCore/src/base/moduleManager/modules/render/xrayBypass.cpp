@@ -171,6 +171,9 @@ void XrayBypass::onEnable()
 
 void XrayBypass::onDisable()
 {
+    // Never leave a dig probe half-finished: the server would keep the
+    // START_DESTROY_BLOCK until the client sends its ABORT.
+    flushProbe();
     // marks are intentionally kept for viewing after the one-shot scan ends
     Logger::Info("XrayBypass", std::string("disabled (scan ") + (m_passDone ? "finished)" : "incomplete)"));
 }
@@ -1274,8 +1277,66 @@ bool XrayBypass::readNameAt(int x, int y, int z, bool& stillOre)
     return true;
 }
 
+void XrayBypass::flushProbe()
+{
+    if (!m_probeAwait)
+        return;
+    m_probeAwait = false;
+    // The server is still holding a START_DESTROY_BLOCK for this position.
+    // Without the ABORT that block stays un-placeable and a dig the client
+    // never completes is a classic anti-cheat signal, so always close the
+    // pair out -- even when the module is being disabled.
+    sendDig(m_probeX, m_probeY, m_probeZ, false);
+    m_probeNextMs = nowMs() + 1000;
+}
+
 void XrayBypass::probeStep(long long now)
 {
+    // An in-flight probe is resolved *first*, before any of the early returns
+    // below. They used to run ahead of it, so losing CanCombat, failing
+    // packetInit, hitting the session cap, or disabling the module inside the
+    // settle window all left the server holding a START_DESTROY_BLOCK we never
+    // aborted.
+    if (m_probeAwait)
+    {
+        if (now - m_probeSentMs < kProbeSettleMs)
+            return;
+        m_probeAwait = false;
+
+        if (packetInit())
+        {
+            bool stillOre = true;
+            if (readNameAt(m_probeX, m_probeY, m_probeZ, stillOre) && !stillOre)
+            {
+                int removed = 0;
+                {
+                    std::lock_guard<std::mutex> lock(m_marksMutex);
+                    for (auto it = m_marks.begin(); it != m_marks.end(); )
+                    {
+                        if ((int)it->x == m_probeX && (int)it->y == m_probeY && (int)it->z == m_probeZ)
+                        {
+                            it = m_marks.erase(it);
+                            ++removed;
+                        }
+                        else
+                            ++it;
+                    }
+                }
+                publishSnapshot();
+                if (removed)
+                {
+                    m_probeRemovedCount += removed;
+                    Logger::Info("XrayBypass", "probe: fake confirmed at "
+                        + std::to_string(m_probeX) + "," + std::to_string(m_probeY) + "," + std::to_string(m_probeZ)
+                        + " (removed " + std::to_string(removed) + ")");
+                }
+            }
+
+            sendDig(m_probeX, m_probeY, m_probeZ, false);   // ABORT — never break anything
+        }
+        return;
+    }
+
     if (!CombatBridge::CanCombat() || !SDK::Minecraft || !SDK::Minecraft->thePlayer)
         return;
     if (!packetInit())
@@ -1287,44 +1348,6 @@ void XrayBypass::probeStep(long long now)
             m_probeCapLogged = true;
             Logger::Info("XrayBypass", "probe: session cap reached (4000). Re-enable the module to reset.");
         }
-        return;
-    }
-
-    // a probe is in flight: after the wait, read the position back and abort
-    if (m_probeAwait)
-    {
-        if (now - m_probeSentMs < 150)
-            return;
-        m_probeAwait = false;
-
-        bool stillOre = true;
-        if (readNameAt(m_probeX, m_probeY, m_probeZ, stillOre) && !stillOre)
-        {
-            int removed = 0;
-            {
-                std::lock_guard<std::mutex> lock(m_marksMutex);
-                for (auto it = m_marks.begin(); it != m_marks.end(); )
-                {
-                    if ((int)it->x == m_probeX && (int)it->y == m_probeY && (int)it->z == m_probeZ)
-                    {
-                        it = m_marks.erase(it);
-                        ++removed;
-                    }
-                    else
-                        ++it;
-                }
-            }
-            publishSnapshot();
-            if (removed)
-            {
-                m_probeRemovedCount += removed;
-                Logger::Info("XrayBypass", "probe: fake confirmed at "
-                    + std::to_string(m_probeX) + "," + std::to_string(m_probeY) + "," + std::to_string(m_probeZ)
-                    + " (removed " + std::to_string(removed) + ")");
-            }
-        }
-
-        sendDig(m_probeX, m_probeY, m_probeZ, false);   // ABORT — never break anything
         return;
     }
 
