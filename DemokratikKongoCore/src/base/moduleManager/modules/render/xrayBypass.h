@@ -107,7 +107,6 @@ private:
     int       m_probeRemovedCount = 0;
     bool      m_probeIdleLogged = false;
     bool      m_probeCapLogged = false;
-    Vector3 m_scanOrigin{};
 
     std::vector<BlockMark> m_marks;          // tick-thread owned
     std::vector<BlockMark> m_nextMarks;      // accumulating sweep (tick thread only)

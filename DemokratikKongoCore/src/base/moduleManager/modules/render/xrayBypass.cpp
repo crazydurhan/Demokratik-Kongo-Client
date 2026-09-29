@@ -255,7 +255,6 @@ void XrayBypass::resetScan()
 
     const Vector3 pos = SDK::Minecraft->thePlayer->GetPos();
     const int r = static_cast<int>(m_rangeXZ->value);
-    m_scanOrigin = pos;
     m_minX = static_cast<int>(pos.x) - r; m_maxX = static_cast<int>(pos.x) + r;
     m_minZ = static_cast<int>(pos.z) - r; m_maxZ = static_cast<int>(pos.z) + r;
     m_minY = static_cast<int>(pos.y) - static_cast<int>(m_expandDown->value);
@@ -263,6 +262,43 @@ void XrayBypass::resetScan()
     m_cursorX = m_minX; m_cursorY = m_minY; m_cursorZ = m_minZ;
 
     m_nextMarks.clear();
+}
+
+// Grow the scan box to cover the player instead of restarting the pass.
+// A pass takes seconds at default range, and a sprinting player leaves the
+// original box mid-sweep -- which used to re-centre the box *and* clear the
+// accumulated marks, so a long pass could repeatedly restart without ever
+// finishing. Growth is capped at one extra range per axis; past the cap a
+// fresh pass really is cheaper than a sweep that large.
+void XrayBypass::expandScanBox(const Vector3& pos)
+{
+    const int r = static_cast<int>(m_rangeXZ->value);
+    const int px = static_cast<int>(pos.x);
+    const int py = static_cast<int>(pos.y);
+    const int pz = static_cast<int>(pos.z);
+
+    const int capX = 2 * r;
+    const int capZ = 2 * r;
+    const int capY = static_cast<int>(m_expandUp->value) + static_cast<int>(m_expandDown->value);
+
+    const int newMinX = std::min(m_minX, px - r);
+    const int newMaxX = std::max(m_maxX, px + r);
+    const int newMinY = std::min(m_minY, py - static_cast<int>(m_expandDown->value));
+    const int newMaxY = std::max(m_maxY, py + static_cast<int>(m_expandUp->value));
+    const int newMinZ = std::min(m_minZ, pz - r);
+    const int newMaxZ = std::max(m_maxZ, pz + r);
+
+    if (newMaxX - newMinX > capX || newMaxZ - newMinZ > capZ || newMaxY - newMinY > capY)
+    {
+        Logger::Info("XrayBypass", "scan box at growth cap, restarting pass");
+        m_passDone = false;
+        resetScan();
+        return;
+    }
+
+    m_minX = newMinX; m_maxX = newMaxX;
+    m_minY = newMinY; m_maxY = newMaxY;
+    m_minZ = newMinZ; m_maxZ = newMaxZ;
 }
 
 // Block -> unlocalized name cache. Blocks are JVM singletons; local and
@@ -656,18 +692,26 @@ void XrayBypass::onTick()
     }
 
     const Vector3 ppos = SDK::Minecraft->thePlayer->GetPos();
+    // Margin allowed around the scan box before the pass reacts to the player
+    // walking out of it.
+    constexpr float kBoxMargin = 8.0f;
     const bool outsideBox =
-        ppos.x < static_cast<float>(m_minX - 8) || ppos.x > static_cast<float>(m_maxX + 8) ||
-        ppos.z < static_cast<float>(m_minZ - 8) || ppos.z > static_cast<float>(m_maxZ + 8);
-    // One-shot flow: a pass is atomic (cursor runs to completion, no periodic
-    // resets) and starts on the first tick after enable or when the player
-    // left the previous box. When it finishes, the module auto-disables.
+        ppos.x < static_cast<float>(m_minX) - kBoxMargin || ppos.x > static_cast<float>(m_maxX) + kBoxMargin ||
+        ppos.z < static_cast<float>(m_minZ) - kBoxMargin || ppos.z > static_cast<float>(m_maxZ) + kBoxMargin;
+    // One-shot flow: a pass is atomic in time (the cursor runs to completion,
+    // no periodic resets) and starts on the first tick after enable. Leaving
+    // the box mid-pass grows the box rather than restarting, so the marks
+    // found so far survive. When the pass finishes, the module auto-disables.
     const bool firstEver = (m_lastScanMs == 0);
-    if (outsideBox || firstEver)
+    if (firstEver)
     {
         m_lastScanMs = now;
         m_passDone = false;
         resetScan();
+    }
+    else if (outsideBox)
+    {
+        expandScanBox(ppos);
     }
 
     // Delay setting spaces out scan steps across game ticks
