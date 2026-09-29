@@ -69,7 +69,6 @@ private:
     NumberSetting* m_expandDown = nullptr;
     NumberSetting* m_delay = nullptr;        // ticks per scan step
     BoolSetting*   m_smartScan = nullptr;    // exposed ores only
-    NumberSetting* m_scanDelay = nullptr;    // ms between full rescans
     BoolSetting*   m_allBlocks = nullptr;
     BoolSetting*   m_verifyOn = nullptr;     // proximity re-check removes fake blocks
     BoolSetting*   m_onlyReal = nullptr;     // render only confirmed-real marks
@@ -78,7 +77,6 @@ private:
     NumberSetting* m_probeRange = nullptr;   // probe reach, blocks (not only close marks)
     EnumSetting*   m_mode = nullptr;         // Outline / Fill
     StringSetting* m_whitelist = nullptr;    // comma list, substring match
-    ColorSetting*  m_color = nullptr;
     BoolSetting*   m_debug = nullptr;        // verbose scan/render diagnostics
 
     // scan state

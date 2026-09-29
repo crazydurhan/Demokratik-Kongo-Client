@@ -107,9 +107,6 @@ XrayBypass::XrayBypass()
     m_delay->suffix = " ticks";
 
     m_smartScan = &add<BoolSetting>("SmartScan", true);
-    m_scanDelay = &add<NumberSetting>("ScanDelay", 1000.0f, 200.0f, 5000.0f, 100.0f);
-    m_scanDelay->suffix = " ms";
-    m_scanDelay->visible = [this]{ return m_smartScan->value; };
 
     m_allBlocks = &add<BoolSetting>("AllBlocks", false);
     m_verifyOn = &add<BoolSetting>("Verify", true);
@@ -125,7 +122,6 @@ XrayBypass::XrayBypass()
     m_whitelist = &add<StringSetting>("Whitelist", "diamond,emerald,iron,gold,redstone,lapis,coal,quartz");
     m_whitelist->itemList = true;
     m_whitelist->visible = [this]{ return !m_allBlocks->value; };
-    m_color = &add<ColorSetting>("Block Color", Color{ 0.35f, 0.9f, 0.95f, 0.9f });
     m_debug = &add<BoolSetting>("Debug", false);
 
     setEnabled(false);
@@ -472,7 +468,7 @@ void XrayBypass::scanStep()
 
     {
         static long long s_lastEntry = 0;
-        if (nowMs() - s_lastEntry > 5000)
+        if (m_debug->value && nowMs() - s_lastEntry > 5000)
         {
             s_lastEntry = nowMs();
             Logger::Info("XrayBypass", "scanStep entered, budget per step=" + std::to_string(kBlocksPerStep));
@@ -611,7 +607,7 @@ void XrayBypass::scanStep()
 
     {
         static long long s_lastBudget = 0;
-        if (nowMs() - s_lastBudget > 5000)
+        if (m_debug->value && nowMs() - s_lastBudget > 5000)
         {
             s_lastBudget = nowMs();
             Logger::Info("XrayBypass", "step budget exhausted, cursor now Y=" + std::to_string(m_cursorY)
@@ -622,10 +618,17 @@ void XrayBypass::scanStep()
 
 void XrayBypass::onTick()
 {
+    // Diagnostics are for debugging a stuck scan, not for normal play: every
+    // one of them built its strings before Logger::Write got to check the
+    // min level, so the cost was paid even with logging turned down. They now
+    // sit behind the Debug setting. Warn/Error are not gated -- those report
+    // real problems.
+    const bool debug = m_debug && m_debug->value;
+
     // periodic state heartbeat so a stuck pipeline is visible in the log
     static long long s_lastBeat = 0;
     const long long nowBeat = nowMs();
-    if (nowBeat - s_lastBeat >= 5000)
+    if (debug && nowBeat - s_lastBeat >= 5000)
     {
         s_lastBeat = nowBeat;
         std::lock_guard<std::mutex> lock(m_marksMutex);
@@ -674,17 +677,15 @@ void XrayBypass::onTick()
         return;
     }
 
-    // full rescan cadence + player moved far from scan origin
     // one-time settings dump per world session — catches config garbage
     static long long s_lastDump = -60000;
-    if (nowMs() - s_lastDump >= 60000)
+    if (debug && nowMs() - s_lastDump >= 60000)
     {
         s_lastDump = nowMs();
         Logger::Info("XrayBypass", "settings: RangeXZ=" + std::to_string(m_rangeXZ->value)
             + " UP=" + std::to_string(m_expandUp->value)
             + " DOWN=" + std::to_string(m_expandDown->value)
             + " Delay=" + std::to_string(m_delay->value)
-            + " ScanDelay=" + std::to_string(m_scanDelay->value)
             + " allBlocks=" + std::to_string(m_allBlocks->value ? 1 : 0)
             + " smart=" + std::to_string(m_smartScan->value ? 1 : 0)
             + " verify=" + std::to_string(m_verifyOn->value ? 1 : 0)
@@ -862,7 +863,7 @@ void XrayBypass::onRender2D()
     // diagnostics: camera/projection sanity, no JNI here — this runs on the
     // render thread and all data comes from the CommonData cache.
     static long long s_lastDrawDiag = 0;
-    if (nowMs() - s_lastDrawDiag > 5000)
+    if (m_debug->value && nowMs() - s_lastDrawDiag > 5000)
     {
         s_lastDrawDiag = nowMs();
         const Vector3 rel{ marks.front().x - rs.camPos.x,
@@ -1460,7 +1461,7 @@ void XrayBypass::probeStep(long long now)
         m_probeNextMs = now;
         m_probeIdleLogged = false;
         ++m_probeSentCount;
-        if (m_probeSentCount % 20 == 0)
+        if (m_probeSentCount % 20 == 0 && m_debug->value)
             Logger::Info("XrayBypass", "probe progress: sent=" + std::to_string(m_probeSentCount)
                 + " removed=" + std::to_string(m_probeRemovedCount));
     }
