@@ -126,6 +126,7 @@ XrayBypass::XrayBypass()
     m_whitelist->itemList = true;
     m_whitelist->visible = [this]{ return !m_allBlocks->value; };
     m_color = &add<ColorSetting>("Block Color", Color{ 0.35f, 0.9f, 0.95f, 0.9f });
+    m_debug = &add<BoolSetting>("Debug", false);
 
     setEnabled(false);
 }
@@ -269,10 +270,25 @@ bool XrayBypass::resolveName(JNIEnv* env, jobject blockObj, std::string& outName
     if (!env || !blockObj)
         return false;
 
+    // Front cache first. The pointer compare misses on its own because a local
+    // ref and a cached global ref to the same object are different handles, so
+    // without this every miss cost a JNI IsSameObject call per cached entry --
+    // roughly 10^6 JNI transitions per pass at default range.
+    if (m_cacheFront < m_cacheRefs.size())
+    {
+        if (m_cacheRefs[m_cacheFront] == blockObj ||
+            env->IsSameObject(m_cacheRefs[m_cacheFront], blockObj))
+        {
+            outName = m_cacheNames[m_cacheFront];
+            return true;
+        }
+    }
+
     for (size_t i = 0; i < m_cacheRefs.size(); ++i)
     {
         if (m_cacheRefs[i] == blockObj || env->IsSameObject(m_cacheRefs[i], blockObj))
         {
+            m_cacheFront = i;
             outName = m_cacheNames[i];
             return true;
         }
@@ -307,6 +323,7 @@ bool XrayBypass::resolveName(JNIEnv* env, jobject blockObj, std::string& outName
     {
         m_cacheRefs.push_back(gref);
         m_cacheNames.push_back(outName);
+        m_cacheFront = m_cacheRefs.size() - 1;
     }
     return true;
 }
@@ -335,6 +352,7 @@ bool XrayBypass::matchBlock(jobject blockObj, std::string& outName)
         return false;
 
     // diagnostics: first distinct names seen (name-mapping sanity)
+    if (m_debug && m_debug->value)
     {
         static std::set<std::string> s_seen;
         if (s_seen.size() < 20 && s_seen.insert(name).second)
@@ -346,29 +364,49 @@ bool XrayBypass::matchBlock(jobject blockObj, std::string& outName)
     if (m_allBlocks->value)
         return true;
 
+    // Whitelist tokens are lowercased once and reused. The previous code
+    // rebuilt a std::string per token, per block, and lowercased it again --
+    // two heap allocations for every token of every block, which at default
+    // range is over a million allocations per pass on the tick thread.
+    if (m_tokenSource != m_whitelist->value)
+        rebuildTokens();
+
     const std::string lower = lowerCopy(name);
-    // whitelist tokens are substrings, e.g. "diamond" matches tile.oreDiamond
-    for (const char* tok = m_whitelist->value.c_str(); *tok; )
+    for (const std::string& token : m_tokens)
+    {
+        if (lower.find(token) != std::string::npos)
+        {
+            if (m_debug && m_debug->value)
+            {
+                static std::set<std::string> s_seenMatch;
+                if (s_seenMatch.size() < 20 && s_seenMatch.insert(name).second)
+                    Logger::Info("XrayBypass", "matched: " + name);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// Split, trim and lowercase the whitelist once per distinct whitelist value.
+// Tick-thread only, like the rest of the scan state.
+void XrayBypass::rebuildTokens()
+{
+    m_tokens.clear();
+    m_tokenSource = m_whitelist->value;
+    for (const char* tok = m_tokenSource.c_str(); *tok; )
     {
         const char* comma = std::strchr(tok, ',');
         const size_t len = comma ? static_cast<size_t>(comma - tok) : std::strlen(tok);
         std::string token(tok, len);
         tok = comma ? comma + 1 : tok + len;
 
-        // trim
-        while (!token.empty() && (token.front() == ' ')) token.erase(token.begin());
-        while (!token.empty() && (token.back() == ' ')) token.pop_back();
+        while (!token.empty() && token.front() == ' ') token.erase(token.begin());
+        while (!token.empty() && token.back() == ' ') token.pop_back();
         if (token.empty())
             continue;
-        if (lower.find(lowerCopy(token)) != std::string::npos)
-        {
-            static std::set<std::string> s_seenMatch;
-            if (s_seenMatch.size() < 20 && s_seenMatch.insert(name).second)
-                Logger::Info("XrayBypass", "matched: " + name);
-            return true;
-        }
+        m_tokens.push_back(lowerCopy(token));
     }
-    return false;
 }
 
 void XrayBypass::scanStep()

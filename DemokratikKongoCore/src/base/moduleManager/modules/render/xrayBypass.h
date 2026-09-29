@@ -61,6 +61,7 @@ private:
 
     bool resolveName(JNIEnv* env, jobject blockObj, std::string& outName);
     bool matchBlock(jobject blockObj, std::string& outName);
+    void rebuildTokens();
     bool isAir(jobject blockObj);
 
     NumberSetting* m_rangeXZ = nullptr;
@@ -78,6 +79,7 @@ private:
     EnumSetting*   m_mode = nullptr;         // Outline / Fill
     StringSetting* m_whitelist = nullptr;    // comma list, substring match
     ColorSetting*  m_color = nullptr;
+    BoolSetting*   m_debug = nullptr;        // verbose scan/render diagnostics
 
     // scan state
     int m_cursorX = 0, m_cursorY = 0, m_cursorZ = 0;
@@ -115,8 +117,15 @@ private:
     // Block objects are JVM singletons — cache name per instance.
     // Local and global refs to one object are different jobject handles, so
     // identity is checked with IsSameObject, never pointer equality.
+    // m_cacheFront is the most recently used entry: the sweep is spatially
+    // coherent, so consecutive reads almost always hit it.
     std::vector<jobject> m_cacheRefs;
     std::vector<std::string> m_cacheNames;
+    size_t m_cacheFront = static_cast<size_t>(-1);
+
+    // Whitelist tokens, lowercased once per distinct whitelist value.
+    std::string m_tokenSource;
+    std::vector<std::string> m_tokens;
 
     // resolved JNI
     jclass m_blockPosClass = nullptr;
