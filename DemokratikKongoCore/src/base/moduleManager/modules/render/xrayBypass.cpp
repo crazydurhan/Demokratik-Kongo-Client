@@ -762,7 +762,10 @@ void XrayBypass::verifyStep()
     if (!frame.env)
         return;
 
-    std::vector<std::array<int, 3>> fakes, confirmed;
+    // Ordered sets, not linear scans: this loop walks up to 8000 marks and, for
+    // each, used to walk both result lists again. verifyStep runs every 2 s.
+    // std::array compares lexicographically, so no hashing and no collisions.
+    std::set<std::array<int, 3>> fakeKeys, confirmedKeys;
     int checked = 0;
     for (const auto& c : candidates)
     {
@@ -790,20 +793,19 @@ void XrayBypass::verifyStep()
         const bool close = (dx * dx + dy * dy + dz * dz) <= R62;
 
         if (!stillOre)
-            fakes.push_back(c);
+            fakeKeys.insert(c);
         else if (close)
-            confirmed.push_back(c);
+            confirmedKeys.insert(c);
         ++checked;
     }
     if (checked == 0)
         return;
 
-    auto inList = [](const std::vector<std::array<int, 3>>& v, const BlockMark& m)
+    // Sets, not linear scans: this loop walks up to 8000 marks and, for each,
+    // used to walk both result lists again. verifyStep runs every 2 s.
+    const auto inList = [](const std::set<std::array<int, 3>>& v, const BlockMark& m)
     {
-        for (const auto& c : v)
-            if (c[0] == (int)m.x && c[1] == (int)m.y && c[2] == (int)m.z)
-                return true;
-        return false;
+        return v.count({ (int)m.x, (int)m.y, (int)m.z }) != 0;
     };
 
     int removed = 0, verified = 0;
@@ -812,13 +814,13 @@ void XrayBypass::verifyStep()
         std::lock_guard<std::mutex> lock(m_marksMutex);
         for (auto it = m_marks.begin(); it != m_marks.end(); )
         {
-            if (!fakes.empty() && inList(fakes, *it))
+            if (!fakeKeys.empty() && inList(fakeKeys, *it))
             {
                 it = m_marks.erase(it);
                 ++removed;
                 continue;
             }
-            if (!it->verified && !confirmed.empty() && inList(confirmed, *it))
+            if (!it->verified && !confirmedKeys.empty() && inList(confirmedKeys, *it))
             {
                 it->verified = true;
                 ++verified;

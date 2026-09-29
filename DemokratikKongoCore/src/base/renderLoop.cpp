@@ -18,8 +18,11 @@ void Base::RenderLoop()
     if (!Base::IsRunning() || Base::ShuttingDown.load(std::memory_order_acquire)) return;
 
     // Never call JNI from the wglSwapBuffers/render thread — Minecraft client
-    // objects are not thread-safe. All entity/camera data is cached on the cheat
-    // thread inside CommonData::UpdateData().
+    // objects are not thread-safe. Entity data is cached on the cheat thread
+    // inside CommonData::UpdateData(); the camera matrices come from
+    // CommonData::RefreshRenderState(), which runs on the client thread in
+    // the world-pass phase. Both are copied into the RenderState snapshot
+    // this thread reads.
     if (!CommonData::DataUpdated())
         return;
 
