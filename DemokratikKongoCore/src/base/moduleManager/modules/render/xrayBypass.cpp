@@ -197,8 +197,12 @@ bool XrayBypass::classInit()
 
     if (!m_blockPosClass && Java::AssignClass("net/minecraft/util/BlockPos", m_blockPosClass))
     {
-        // AssignClass hands out a global ref; keep it.
+        // AssignClass hands out a global ref; keep it. The ctor lookup is
+        // cleared explicitly: a failed GetMethodID leaves NoSuchMethodError
+        // pending, and the next JNI call in scanStep (NewObject) would then
+        // run with a pending exception, which is illegal JNI.
         m_blockPosCtor = env->GetMethodID(m_blockPosClass, "<init>", "(III)V");
+        JniResolve::ClearException(env);
     }
 
     if (!m_getBlock)
@@ -207,7 +211,9 @@ bool XrayBypass::classInit()
         if (Java::AssignClass("net/minecraft/block/state/IBlockState", ibs))
             m_getBlock = JniResolve::Method(env, ibs,
                 "()Lnet/minecraft/block/Block;", "getBlock");
-        if (ibs) env->DeleteLocalRef(ibs);
+        // AssignClass returns a *global* ref, so DeleteLocalRef is wrong here
+        // (undefined behaviour, and it leaks the global ref regardless).
+        // Hold it for the module's lifetime, like m_blockPosClass above.
     }
 
     const bool ok = m_getBlockState && m_blockPosCtor && m_getBlock;
@@ -936,6 +942,20 @@ namespace
         if (methodClass) env->DeleteLocalRef(methodClass);
         return result;
     }
+
+    // Releases global refs on every exit path, including the early returns in
+    // packetInit(). The previous code called DeleteLocalRef on refs made with
+    // NewGlobalRef, which is undefined behaviour and leaked them anyway.
+    struct GlobalRefGuard
+    {
+        JNIEnv* e = nullptr;
+        jobject a = nullptr, b = nullptr;
+        ~GlobalRefGuard()
+        {
+            if (a) e->DeleteGlobalRef(a);
+            if (b) e->DeleteGlobalRef(b);
+        }
+    };
 }
 
 bool XrayBypass::packetInit()
@@ -977,8 +997,9 @@ bool XrayBypass::packetInit()
         return false;
     }
 
-    jclass actionCls = nullptr;
-    jclass facingCls = nullptr;
+    // actionCls / facingCls are global refs; the guard releases them on every
+    // exit path, including the early returns below.
+    GlobalRefGuard globalRefs{ env, nullptr, nullptr };
     jobjectArray ctors = (jobjectArray)env->CallObjectMethod(m_c07Class, getDeclaredConstructors);
     JniResolve::ClearException(env);
     if (ctors)
@@ -1003,22 +1024,29 @@ bool XrayBypass::packetInit()
                     // BlockPos is the param that matches our scan BlockPos class
                     if (env->IsSameObject(p1, m_blockPosClass))
                     {
-                        actionCls = (jclass)env->NewGlobalRef(p0);
-                        facingCls = (jclass)env->NewGlobalRef(p2);
+                        globalRefs.a = (jclass)env->NewGlobalRef(p0);
+                        globalRefs.b = (jclass)env->NewGlobalRef(p2);
                     }
                     else if (env->IsSameObject(p2, m_blockPosClass))
                     {
-                        actionCls = (jclass)env->NewGlobalRef(p0);
-                        facingCls = (jclass)env->NewGlobalRef(p1);
+                        globalRefs.a = (jclass)env->NewGlobalRef(p0);
+                        globalRefs.b = (jclass)env->NewGlobalRef(p1);
                     }
 
-                    std::string sig = "(";
-                    sig += JniResolve::ClassToDescriptor(env, p0);
-                    sig += JniResolve::ClassToDescriptor(env, p1);
-                    sig += JniResolve::ClassToDescriptor(env, p2);
-                    sig += ")V";
-                    m_c07Ctor = env->GetMethodID(m_c07Class, "<init>", sig.c_str());
-                    JniResolve::ClearException(env);
+                    // Only resolve the ctor we actually identified. The old code
+                    // resolved one for *any* 3-arg ctor with an enum first param,
+                    // which could latch a signature whose BlockPos we never
+                    // matched and then fail permanently.
+                    if (globalRefs.a && globalRefs.b)
+                    {
+                        std::string sig = "(";
+                        sig += JniResolve::ClassToDescriptor(env, p0);
+                        sig += JniResolve::ClassToDescriptor(env, p1);
+                        sig += JniResolve::ClassToDescriptor(env, p2);
+                        sig += ")V";
+                        m_c07Ctor = env->GetMethodID(m_c07Class, "<init>", sig.c_str());
+                        JniResolve::ClearException(env);
+                    }
                 }
                 if (p0) env->DeleteLocalRef(p0);
                 if (p1) env->DeleteLocalRef(p1);
@@ -1029,12 +1057,12 @@ bool XrayBypass::packetInit()
         }
         env->DeleteLocalRef(ctors);
     }
-    if (!m_c07Ctor || !actionCls || !facingCls)
+    if (!m_c07Ctor || !globalRefs.a || !globalRefs.b)
         return false;
 
     // --- enum constants: Action{START=0, ABORT=1}, Facing{..., UP=1} (1.8.9) ---
     {
-        jobjectArray acts = (jobjectArray)env->CallObjectMethod(actionCls, getEnumConstants);
+        jobjectArray acts = (jobjectArray)env->CallObjectMethod(globalRefs.a, getEnumConstants);
         JniResolve::ClearException(env);
         if (!acts || env->GetArrayLength(acts) < 6)
         {
@@ -1049,7 +1077,7 @@ bool XrayBypass::packetInit()
         env->DeleteLocalRef(a1);
         env->DeleteLocalRef(acts);
 
-        jobjectArray facs = (jobjectArray)env->CallObjectMethod(facingCls, getEnumConstants);
+        jobjectArray facs = (jobjectArray)env->CallObjectMethod(globalRefs.b, getEnumConstants);
         JniResolve::ClearException(env);
         if (!facs || env->GetArrayLength(facs) < 6)
         {
@@ -1061,8 +1089,7 @@ bool XrayBypass::packetInit()
         env->DeleteLocalRef(f1);
         env->DeleteLocalRef(facs);
     }
-    env->DeleteLocalRef(actionCls);
-    env->DeleteLocalRef(facingCls);
+    // actionCls / facingCls are released by globalRefs on every exit path.
 
     // --- sendQueue field on EntityPlayerSP + addToSendQueue ---
     jclass playerCls = nullptr;
