@@ -23,6 +23,9 @@
 namespace
 {
     constexpr int kBlocksPerStep = 3000;   // JNI block reads per scan step
+    constexpr int kMaxMarks = 8000;        // hard cap on marks held per pass
+    constexpr long long kProbeSettleMs = 150;   // START -> read-back window
+    constexpr long long kPacketInitRetryMs = 2000;
 
     unsigned int oreColor(const std::string& lower)
     {
@@ -459,10 +462,16 @@ void XrayBypass::scanStep()
             ++g_diag.matched;
             // SmartScan: only ores with at least one air neighbor — those are
             // genuinely visible and never obfuscated by anti-xray.
-            bool exposed = true;
+            //
+            // `passed` is the filter verdict, `verified` records *how* we know
+            // the block is real. Only the SmartScan air-neighbour test is proof
+            // at scan time, so with SmartScan off a mark is born unverified and
+            // has to be promoted later by verifyStep(). Folding both into one
+            // flag left every mark verified, which silently disabled OnlyReal,
+            // the dim-unverified render and the verify promotion.
+            bool passed = !smart;
             if (smart)
             {
-                exposed = false;
                 static const int offs[6][3] = {
                     {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
                 for (const auto& off : offs)
@@ -480,21 +489,23 @@ void XrayBypass::scanStep()
                     if (nb && isAir(nb))
                     {
                         env->DeleteLocalRef(nb);
-                        exposed = true;
+                        passed = true;
                         break;
                     }
                     if (nb) env->DeleteLocalRef(nb);
                 }
             }
 
-            if (exposed)
+            if (passed)
             {
-            unsigned int col = oreColor(lowerCopy(matchedName));
-                std::lock_guard<std::mutex> lock(m_marksMutex);
+                const unsigned int col = oreColor(lowerCopy(matchedName));
+                // m_nextMarks is owned by the tick thread only (resetScan,
+                // scanStep, and the pass-end swap are all tick-side), so it
+                // needs no lock — the render thread reads the snapshot.
                 m_nextMarks.push_back(BlockMark{
                     static_cast<float>(x), static_cast<float>(y),
-                    static_cast<float>(z), col, exposed });
-                if (m_nextMarks.size() > 8000)
+                    static_cast<float>(z), col, smart });
+                if (m_nextMarks.size() > kMaxMarks)
                     m_nextMarks.erase(m_nextMarks.begin());
             }
         }

@@ -31,7 +31,11 @@ private:
     {
         float x = 0.0f, y = 0.0f, z = 0.0f;
         unsigned int color = 0;
-        bool verified = false;   // exposed at scan, or confirmed by proximity re-check
+        // Proven real, not merely whitelisted: set at scan time only by the
+        // SmartScan air-neighbour test, later by verifyStep()'s proximity
+        // re-check or by a dig-probe read-back. A mark found with SmartScan off
+        // starts unverified.
+        bool verified = false;
     };
 
     void resetScan();
