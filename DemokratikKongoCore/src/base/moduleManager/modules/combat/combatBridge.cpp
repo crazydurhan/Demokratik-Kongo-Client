@@ -1,7 +1,6 @@
 #include "combatBridge.h"
 
 #include "../../commonData.h"
-#include "friends.h"
 #include "../../../menu/menu.h"
 #include "../../../sdk/jniResolve.h"
 #include "../../../patcher/patcher.h"
