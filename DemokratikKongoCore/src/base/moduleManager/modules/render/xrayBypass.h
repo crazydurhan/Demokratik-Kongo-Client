@@ -3,6 +3,7 @@
 #include "../../module.h"
 #include "../../../sdk/sdk.h"
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -33,10 +34,11 @@ private:
     {
         float x = 0.0f, y = 0.0f, z = 0.0f;
         unsigned int color = 0;
-        // Proven real, not merely whitelisted: set at scan time only by the
-        // SmartScan air-neighbour test, later by verifyStep()'s proximity
-        // re-check or by a dig-probe read-back. A mark found with SmartScan off
-        // starts unverified.
+        // Proven real, not merely whitelisted: set at scan time by the
+        // SmartScan air-neighbour test, or later by verifyStep()'s proximity
+        // re-check. A mark found with SmartScan off starts unverified. The
+        // dig-probe only ever *removes* marks it disproves; it does not
+        // promote the survivors.
         bool verified = false;
     };
 
@@ -54,6 +56,8 @@ private:
     // packet dig-probe: sends C07 start/abort pairs at candidate positions so
     // the server re-sends the real block (fake vs real becomes observable)
     bool packetInit();
+    bool resolveC07(JNIEnv* env);
+    bool resolveSendQueue(JNIEnv* env);
     void probeStep(long long now);
     bool readNameAt(int x, int y, int z, bool& stillOre);
     bool sendDig(int x, int y, int z, bool start);
@@ -95,7 +99,6 @@ private:
     jobject   m_actionStart = nullptr;   // global refs
     jobject   m_actionAbort = nullptr;
     jobject   m_facingUp = nullptr;
-    bool      m_packetInitFailed = false;
     bool      m_packetInitWarned = false;
     long long m_nextPacketInitMs = 0;
     bool      m_probeAwait = false;

@@ -72,6 +72,7 @@ namespace
 		static const char* kRemovePotionEffect[] = { "func_70618_k", "func_82170_o", "removePotionEffectClient" };
 		static const char* kIsPotionActive[] = { "func_70644_a", "func_82165_m" };
 		static const char* kIsAirBlock[] = { "func_175623_d" };
+		static const char* kGetUnlocalizedName[] = { "func_149739_a" };
 		static const char* kGetBlockState[] = { "func_180495_p" };
 		static const char* kGetBlock[] = { "func_177230_c" };
 		static const char* kGetStrVsBlock[] = { "func_150997_a" };
@@ -129,6 +130,13 @@ namespace
 		{ "removePotionEffect", kRemovePotionEffect, sizeof(kRemovePotionEffect) / sizeof(kRemovePotionEffect[0]) },
 		{ "isPotionActive", kIsPotionActive, sizeof(kIsPotionActive) / sizeof(kIsPotionActive[0]) },
 		{ "isAirBlock", kIsAirBlock, sizeof(kIsAirBlock) / sizeof(kIsAirBlock[0]) },
+		// Block.getUnlocalizedName (XrayBypass reads every block's name to match
+		// the whitelist). The MCP name alone resolves nothing on an SRG-named
+		// runtime, and JniResolve::Method has no descriptor fallback -- without
+		// this alias the scan silently matches zero blocks there. Note the SRG
+		// name differs from ItemStack.getUnlocalizedName (func_77977_a), which
+		// is why the generated table keyed on the MCP name alone was not enough.
+		{ "getUnlocalizedName", kGetUnlocalizedName, sizeof(kGetUnlocalizedName) / sizeof(kGetUnlocalizedName[0]) },
 		{ "getBlockState", kGetBlockState, sizeof(kGetBlockState) / sizeof(kGetBlockState[0]) },
 		{ "getBlock", kGetBlock, sizeof(kGetBlock) / sizeof(kGetBlock[0]) },
 		{ "getStrVsBlock", kGetStrVsBlock, sizeof(kGetStrVsBlock) / sizeof(kGetStrVsBlock[0]) },

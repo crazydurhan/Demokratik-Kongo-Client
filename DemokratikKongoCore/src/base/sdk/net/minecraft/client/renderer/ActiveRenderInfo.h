@@ -14,13 +14,18 @@ struct CActiveRenderInfo : IClass
 	Matrix ProjectionMatrix();
 	Matrix ModelViewMatrix();
 
-	// Negative cache for the shape-based field lookup. Resolving PROJECTION /
-	// MODELVIEW by matrix shape costs up to 9 GetStaticFieldID plus 9*16
-	// CallFloatMethod per attempt, and both accessors are called every
-	// world-pass frame. On a client where the shape never matches, retrying
-	// forever means ~300 extra JNI calls per frame indefinitely. These flags
-	// are only ever set on the client thread that runs SDK::Init().
-	bool projectionLookupTried = false;
-	bool modelViewLookupTried = false;
+	// Bounded retry budget for the shape-based field lookup. Resolving
+	// PROJECTION / MODELVIEW by matrix shape costs up to 9 GetStaticFieldID
+	// plus 9*16 CallFloatMethod per attempt.
+	//
+	// The constructor runs from SDK::Init(), long before Minecraft has
+	// rendered a frame, when the buffers are still all zero and the shape test
+	// cannot match. The per-frame retry is what recovers from that, so it must
+	// stay -- but a client whose matrices genuinely do not match must not pay
+	// that cost on every frame forever, hence the budget: enough frames to
+	// cover the startup window, then it gives up.
+	enum { kMatrixLookupBudget = 240 };
+	int projectionRetriesLeft = kMatrixLookupBudget;
+	int modelViewRetriesLeft = kMatrixLookupBudget;
 };
 

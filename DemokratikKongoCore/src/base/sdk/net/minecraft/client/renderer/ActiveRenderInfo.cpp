@@ -100,10 +100,11 @@ CActiveRenderInfo::CActiveRenderInfo()
 	std::string projName, mvName;
 	this->FieldIDs["PROJECTION"] = findStaticMatrixBuffer(env, this->Class, true, &projName);
 	this->FieldIDs["MODELVIEW"] = findStaticMatrixBuffer(env, this->Class, false, &mvName);
-	// The constructor's attempt counts as the one allowed retry, so an
-	// unsupported client does not re-run the candidate sweep on every frame.
-	this->projectionLookupTried = true;
-	this->modelViewLookupTried = true;
+	// This attempt normally fails -- the buffers are still zero at SDK::Init()
+	// time -- so it consumes budget but does NOT stop the per-frame retry that
+	// recovers once the world has actually rendered.
+	if (!this->FieldIDs["PROJECTION"]) --this->projectionRetriesLeft;
+	if (!this->FieldIDs["MODELVIEW"])  --this->modelViewRetriesLeft;
 
 	if (this->FieldIDs["PROJECTION"] && this->FieldIDs["MODELVIEW"])
 	{
@@ -134,14 +135,11 @@ Matrix CActiveRenderInfo::ProjectionMatrix()
 	jfieldID fid = this->FieldIDs["PROJECTION"];
 	if (!env || !this->Class)
 		return Matrix{};
-	if (!fid && !this->projectionLookupTried)
+	if (!fid && this->projectionRetriesLeft > 0)
 	{
-		// Try the shape lookup at most once. A client whose matrices do not
-		// match the projection shape would otherwise pay the full candidate
-		// sweep on every world-pass frame, forever.
 		fid = findStaticMatrixBuffer(env, this->Class, true);
 		this->FieldIDs["PROJECTION"] = fid;
-		this->projectionLookupTried = true;
+		if (!fid) --this->projectionRetriesLeft;
 	}
 	if (!fid)
 		return Matrix{};
@@ -162,11 +160,11 @@ Matrix CActiveRenderInfo::ModelViewMatrix()
 	jfieldID fid = this->FieldIDs["MODELVIEW"];
 	if (!env || !this->Class)
 		return Matrix{};
-	if (!fid && !this->modelViewLookupTried)
+	if (!fid && this->modelViewRetriesLeft > 0)
 	{
 		fid = findStaticMatrixBuffer(env, this->Class, false);
 		this->FieldIDs["MODELVIEW"] = fid;
-		this->modelViewLookupTried = true;
+		if (!fid) --this->modelViewRetriesLeft;
 	}
 	if (!fid)
 		return Matrix{};

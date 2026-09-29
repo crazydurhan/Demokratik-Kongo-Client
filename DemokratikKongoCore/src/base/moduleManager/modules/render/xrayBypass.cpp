@@ -162,7 +162,6 @@ void XrayBypass::onEnable()
     m_probeRemovedCount = 0;
     m_probeIdleLogged = false;
     m_probeCapLogged = false;
-    m_packetInitFailed = false;
     m_packetInitWarned = false;
     m_nextPacketInitMs = 0;
     Logger::Info("XrayBypass", "enabled — one-shot scan from current position");
@@ -267,8 +266,12 @@ void XrayBypass::resetScan()
 // A pass takes seconds at default range, and a sprinting player leaves the
 // original box mid-sweep -- which used to re-centre the box *and* clear the
 // accumulated marks, so a long pass could repeatedly restart without ever
-// finishing. Growth is capped at one extra range per axis; past the cap a
-// fresh pass really is cheaper than a sweep that large.
+// finishing.
+//
+// The cap is the *initial* span plus one extra range per axis. Note it must
+// exceed the initial span: resetScan() always sets the span to exactly one
+// range, so a cap equal to that span would be exceeded by the very first
+// growth proposal and the function would never actually grow anything.
 void XrayBypass::expandScanBox(const Vector3& pos)
 {
     const int r = static_cast<int>(m_rangeXZ->value);
@@ -276,14 +279,19 @@ void XrayBypass::expandScanBox(const Vector3& pos)
     const int py = static_cast<int>(pos.y);
     const int pz = static_cast<int>(pos.z);
 
-    const int capX = 2 * r;
-    const int capZ = 2 * r;
-    const int capY = static_cast<int>(m_expandUp->value) + static_cast<int>(m_expandDown->value);
+    const int upSpan = static_cast<int>(m_expandUp->value);
+    const int downSpan = static_cast<int>(m_expandDown->value);
+
+    // resetScan() gives a span of 2r on X/Z and upSpan+downSpan on Y; allow
+    // exactly one more range beyond that before restarting.
+    const int capX = 4 * r;
+    const int capZ = 4 * r;
+    const int capY = 2 * (upSpan + downSpan);
 
     const int newMinX = std::min(m_minX, px - r);
     const int newMaxX = std::max(m_maxX, px + r);
-    const int newMinY = std::min(m_minY, py - static_cast<int>(m_expandDown->value));
-    const int newMaxY = std::max(m_maxY, py + static_cast<int>(m_expandUp->value));
+    const int newMinY = std::min(m_minY, py - downSpan);
+    const int newMaxY = std::max(m_maxY, py + upSpan);
     const int newMinZ = std::min(m_minZ, pz - r);
     const int newMaxZ = std::max(m_maxZ, pz + r);
 
@@ -650,6 +658,10 @@ void XrayBypass::onTick()
     if (!CombatBridge::CanCombat() || !CommonData::SanityCheck() ||
         !SDK::Minecraft || !SDK::Minecraft->thePlayer)
     {
+        // A probe started a moment ago still needs its ABORT even though we are
+        // leaving the combat state here, otherwise the server keeps the dig
+        // open.
+        flushProbe();
         {
             std::lock_guard<std::mutex> lock(m_marksMutex);
             m_marks.clear();
@@ -829,7 +841,10 @@ void XrayBypass::verifyStep()
         }
         left = m_marks.size();
     }
-    publishSnapshot();
+    // Only republish when something actually changed -- this would otherwise
+    // copy up to 8000 marks every 2 s for nothing.
+    if (removed || verified)
+        publishSnapshot();
 
     if (removed || verified)
         Logger::Info("XrayBypass", "verify: removed " + std::to_string(removed)
@@ -1063,12 +1078,50 @@ bool XrayBypass::packetInit()
     if (now < m_nextPacketInitMs)
         return false;
     m_nextPacketInitMs = now + kPacketInitRetryMs;
-    m_packetInitFailed = false;
 
     JniResolve::LocalFrame frame(env, 96);
     if (!frame.env)
         return false;
 
+    // The C07 half is resolved as a unit: a partial attempt leaves nothing
+    // usable, so re-run all of it rather than resuming part-way through.
+    const bool haveC07 = m_c07Ctor && m_actionStart && m_actionAbort && m_facingUp;
+    if (!haveC07 && !resolveC07(env))
+        return false;
+
+    // The sendQueue half is the same deal: resolved as a unit, retried whole.
+    if (!resolveSendQueue(env))
+    {
+        // Log the first failure only: init retries every kPacketInitRetryMs,
+        // and a warn per attempt would flood the log on a client where the
+        // packet path is simply unavailable.
+        if (!m_packetInitWarned)
+        {
+            m_packetInitWarned = true;
+            Logger::Warn("XrayBypass", "PacketScan init failed (ctor/field/method resolution), retrying.");
+        }
+        return false;
+    }
+
+    if (m_packetInitWarned)
+    {
+        m_packetInitWarned = false;
+        Logger::Info("XrayBypass", "PacketScan recovered: C07 dig-probe initialized.");
+    }
+    else
+    {
+        Logger::Info("XrayBypass", "PacketScan ready: C07 dig-probe initialized.");
+    }
+    return true;
+}
+
+// Resolves the C07 class, its (Action, BlockPos, Facing) constructor and the
+// enum constants we need. Split out of packetInit() so it can be skipped
+// once it succeeds: the old inline version left m_c07Ctor latched after a
+// partial run, so the retry on the next attempt skipped the constructor scan
+// entirely and could never reach the part that had actually failed.
+bool XrayBypass::resolveC07(JNIEnv* env)
+{
     // --- C07 class via the alias table ---
     if (!Java::AssignClass("net/minecraft/network/play/client/C07PacketPlayerDigging", m_c07Class))
         return false;
@@ -1184,13 +1237,24 @@ bool XrayBypass::packetInit()
         env->DeleteLocalRef(facs);
     }
     // actionCls / facingCls are released by globalRefs on every exit path.
+    return m_c07Ctor && m_actionStart && m_actionAbort && m_facingUp;
+}
 
-    // --- sendQueue field on EntityPlayerSP + addToSendQueue ---
+// Resolves EntityPlayerSP's outgoing-packet queue field and its send method.
+// Split out of packetInit() for the same reason as resolveC07(): a retry must
+// be able to re-run exactly the half that failed.
+bool XrayBypass::resolveSendQueue(JNIEnv* env)
+{
     jclass playerCls = nullptr;
+    // AssignClass returns a global ref; without this guard every retry leaked
+    // one, and the new retry timer meant 30 leaks a minute on a client where
+    // this path never resolves.
+    GlobalRefGuard playerClassRef{ env, nullptr, nullptr };
     if (!Java::AssignClass("net/minecraft/client/entity/EntityPlayerSP", playerCls))
         return false;
+    playerClassRef.a = playerCls;
 
-    classClass = env->FindClass("java/lang/Class");
+    jclass classClass = env->FindClass("java/lang/Class");
     jclass fieldClass = env->FindClass("java/lang/reflect/Field");
     if (!classClass || !fieldClass)
     {
@@ -1251,21 +1315,7 @@ bool XrayBypass::packetInit()
         }
     }
 
-    m_packetInitFailed = !(m_sendQueueField && m_addToSendQueue && m_c07Ctor &&
-                           m_actionStart && m_actionAbort && m_facingUp);
-    if (!m_packetInitFailed)
-    {
-        Logger::Info("XrayBypass", "PacketScan ready: C07 dig-probe initialized.");
-    }
-    else if (!m_packetInitWarned)
-    {
-        // Log the first failure only: init now retries every
-        // kPacketInitRetryMs, and a warn per attempt would flood the log on a
-        // client where the packet path is simply unavailable.
-        m_packetInitWarned = true;
-        Logger::Warn("XrayBypass", "PacketScan init failed (ctor/field/method resolution), retrying.");
-    }
-    return !m_packetInitFailed;
+    return m_sendQueueField && m_addToSendQueue != nullptr;
 }
 
 bool XrayBypass::sendDig(int x, int y, int z, bool start)
