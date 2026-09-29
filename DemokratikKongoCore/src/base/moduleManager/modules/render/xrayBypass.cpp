@@ -283,10 +283,12 @@ void XrayBypass::expandScanBox(const Vector3& pos)
     const int downSpan = static_cast<int>(m_expandDown->value);
 
     // resetScan() gives a span of 2r on X/Z and upSpan+downSpan on Y; allow
-    // exactly one more range beyond that before restarting.
+    // exactly one more range beyond that before restarting. When both vertical
+    // settings are 0 the Y span is 0 and the box could never grow at all, so
+    // the vertical cap falls back to the horizontal range.
     const int capX = 4 * r;
     const int capZ = 4 * r;
-    const int capY = 2 * (upSpan + downSpan);
+    const int capY = 2 * std::max(upSpan + downSpan, r);
 
     const int newMinX = std::min(m_minX, px - r);
     const int newMaxX = std::max(m_maxX, px + r);
@@ -295,8 +297,13 @@ void XrayBypass::expandScanBox(const Vector3& pos)
     const int newMinZ = std::min(m_minZ, pz - r);
     const int newMaxZ = std::max(m_maxZ, pz + r);
 
-    if (newMaxX - newMinX > capX || newMaxZ - newMinZ > capZ || newMaxY - newMinY > capY)
+    if (newMaxX - newMinX > capX || newMaxZ - newMinZ > capZ || newMaxY - newMinY > capY ||
+        newMinY < m_cursorY)
     {
+        // newMinY < m_cursorY means the growth would add layers *below* the
+        // cursor. The sweep only ever advances upward, so those layers would
+        // not be scanned in this pass and would silently never be covered --
+        // a restart from the new position is the only correct option here.
         Logger::Info("XrayBypass", "scan box at growth cap, restarting pass");
         m_passDone = false;
         resetScan();
@@ -1147,12 +1154,18 @@ bool XrayBypass::resolveC07(JNIEnv* env)
     // actionCls / facingCls are global refs; the guard releases them on every
     // exit path, including the early returns below.
     GlobalRefGuard globalRefs{ env, nullptr, nullptr };
+    // Resolved into a local, not straight into m_c07Ctor: latching the member
+    // as soon as the signature is known left a state where the ctor was set
+    // but the enum constants were not, and the retry then skipped the
+    // constructor scan (its loop guard tests the found ctor) and could never
+    // recover. m_c07Ctor is only committed once the whole half succeeds.
+    jmethodID foundCtor = nullptr;
     jobjectArray ctors = (jobjectArray)env->CallObjectMethod(m_c07Class, getDeclaredConstructors);
     JniResolve::ClearException(env);
     if (ctors)
     {
         const jsize n = env->GetArrayLength(ctors);
-        for (jsize i = 0; i < n && !m_c07Ctor; ++i)
+        for (jsize i = 0; i < n && !foundCtor; ++i)
         {
             jobject ctor = env->GetObjectArrayElement(ctors, i);
             if (!ctor)
@@ -1191,7 +1204,7 @@ bool XrayBypass::resolveC07(JNIEnv* env)
                         sig += JniResolve::ClassToDescriptor(env, p1);
                         sig += JniResolve::ClassToDescriptor(env, p2);
                         sig += ")V";
-                        m_c07Ctor = env->GetMethodID(m_c07Class, "<init>", sig.c_str());
+                        foundCtor = env->GetMethodID(m_c07Class, "<init>", sig.c_str());
                         JniResolve::ClearException(env);
                     }
                 }
@@ -1204,7 +1217,7 @@ bool XrayBypass::resolveC07(JNIEnv* env)
         }
         env->DeleteLocalRef(ctors);
     }
-    if (!m_c07Ctor || !globalRefs.a || !globalRefs.b)
+    if (!foundCtor || !globalRefs.a || !globalRefs.b)
         return false;
 
     // --- enum constants: Action{START=0, ABORT=1}, Facing{..., UP=1} (1.8.9) ---
@@ -1237,6 +1250,7 @@ bool XrayBypass::resolveC07(JNIEnv* env)
         env->DeleteLocalRef(facs);
     }
     // actionCls / facingCls are released by globalRefs on every exit path.
+    m_c07Ctor = foundCtor;
     return m_c07Ctor && m_actionStart && m_actionAbort && m_facingUp;
 }
 
@@ -1286,6 +1300,10 @@ bool XrayBypass::resolveSendQueue(JNIEnv* env)
                 bool hit = false;
                 for (const char* cand : kSendNames)
                     if (nm && std::strcmp(nm, cand) == 0) { hit = true; break; }
+                // Keep our own copy: GetFieldID below runs *after* the JNI
+                // string is released, and reading `nm` then was a
+                // use-after-free that silently left m_sendQueueField null.
+                const std::string fieldName = nm ? std::string(nm) : std::string();
                 if (nm) env->ReleaseStringUTFChars(jn, nm);
                 if (jn) env->DeleteLocalRef(jn);
 
@@ -1302,7 +1320,7 @@ bool XrayBypass::resolveSendQueue(JNIEnv* env)
                         if (sender)
                         {
                             std::string fdesc = JniResolve::ClassToDescriptor(env, typeCls);
-                            m_sendQueueField = env->GetFieldID(playerCls, nm, fdesc.c_str());
+                            m_sendQueueField = env->GetFieldID(playerCls, fieldName.c_str(), fdesc.c_str());
                             JniResolve::ClearException(env);
                             m_addToSendQueue = sender;
                         }

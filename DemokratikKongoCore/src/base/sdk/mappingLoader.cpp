@@ -135,7 +135,8 @@ namespace
 		// runtime, and JniResolve::Method has no descriptor fallback -- without
 		// this alias the scan silently matches zero blocks there. Note the SRG
 		// name differs from ItemStack.getUnlocalizedName (func_77977_a), which
-		// is why the generated table keyed on the MCP name alone was not enough.
+		// the generated table registers separately; the two lists coexist and
+		// are tried in order.
 		{ "getUnlocalizedName", kGetUnlocalizedName, sizeof(kGetUnlocalizedName) / sizeof(kGetUnlocalizedName[0]) },
 		{ "getBlockState", kGetBlockState, sizeof(kGetBlockState) / sizeof(kGetBlockState[0]) },
 		{ "getBlock", kGetBlock, sizeof(kGetBlock) / sizeof(kGetBlock[0]) },
