@@ -3,6 +3,8 @@
 #include "../../module.h"
 #include "../../../sdk/sdk.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,7 +24,7 @@ public:
     void onRender2D() override;
 
     // marks stay on screen after the one-shot scan auto-disables the module
-    bool renderWhenDisabled() const override { return m_passDone; }
+    bool renderWhenDisabled() const override { return m_passDone.load(); }
 
     std::string arrayListSuffix(SuffixDetail detail) const override;
 
@@ -39,8 +41,15 @@ private:
     };
 
     void resetScan();
+    void expandScanBox(const Vector3& pos);
     void scanStep();
     void verifyStep();
+
+    // Republish the render-thread view of m_marks. Called after every change
+    // to m_marks; the render thread only ever touches the snapshot, so it
+    // never copies or locks while drawing.
+    void publishSnapshot();
+    void flushProbe();
 
     // packet dig-probe: sends C07 start/abort pairs at candidate positions so
     // the server re-sends the real block (fake vs real becomes observable)
@@ -76,7 +85,7 @@ private:
     long long m_lastScanMs = 0;
     long long m_lastStepMs = 0;
     long long m_lastVerifyMs = 0;
-    bool m_passDone = false;
+    std::atomic<bool> m_passDone{ false };
 
     // packet dig-probe state
     jclass    m_c07Class = nullptr;
@@ -98,9 +107,10 @@ private:
     bool      m_probeCapLogged = false;
     Vector3 m_scanOrigin{};
 
-    std::vector<BlockMark> m_marks;          // render thread reads
-    std::vector<BlockMark> m_nextMarks;      // accumulating sweep
-    std::mutex m_marksMutex;
+    std::vector<BlockMark> m_marks;          // tick-thread owned
+    std::vector<BlockMark> m_nextMarks;      // accumulating sweep (tick thread only)
+    std::shared_ptr<const std::vector<BlockMark>> m_snapshot;   // render thread
+    mutable std::mutex m_marksMutex;         // guards m_marks + m_snapshot
 
     // Block objects are JVM singletons — cache name per instance.
     // Local and global refs to one object are different jobject handles, so

@@ -139,6 +139,12 @@ std::string XrayBypass::arrayListSuffix(SuffixDetail detail) const
     return m_allBlocks->value ? "All" : "Smart";
 }
 
+void XrayBypass::publishSnapshot()
+{
+    std::lock_guard<std::mutex> lock(m_marksMutex);
+    m_snapshot = std::make_shared<const std::vector<BlockMark>>(m_marks);
+}
+
 void XrayBypass::onEnable()
 {
     classInit();
@@ -147,6 +153,7 @@ void XrayBypass::onEnable()
         m_marks.clear();
         m_nextMarks.clear();
     }
+    publishSnapshot();
     m_passDone = false;
     m_lastScanMs = 0;   // first tick starts a fresh pass from the current position
     m_lastStepMs = 0;
@@ -403,11 +410,14 @@ void XrayBypass::scanStep()
     {
         if (m_cursorY > m_maxY)  // sweep finished
         {
-            std::lock_guard<std::mutex> lock(m_marksMutex);
-            m_marks.swap(m_nextMarks);
-            m_nextMarks.clear();
+            {
+                std::lock_guard<std::mutex> lock(m_marksMutex);
+                m_marks.swap(m_nextMarks);
+                m_nextMarks.clear();
+                m_passDone = true;
+            }
+            publishSnapshot();
             g_diag.summarize();
-            m_passDone = true;
             if (m_verifyOn->value)
             {
                 Logger::Info("XrayBypass", "Pass complete — " + std::to_string(m_marks.size())
@@ -557,8 +567,11 @@ void XrayBypass::onTick()
     if (!CombatBridge::CanCombat() || !CommonData::SanityCheck() ||
         !SDK::Minecraft || !SDK::Minecraft->thePlayer)
     {
-        std::lock_guard<std::mutex> lock(m_marksMutex);
-        m_marks.clear();
+        {
+            std::lock_guard<std::mutex> lock(m_marksMutex);
+            m_marks.clear();
+        }
+        publishSnapshot();
         m_lastScanMs = 0;
         return;
     }
@@ -725,6 +738,7 @@ void XrayBypass::verifyStep()
         }
         left = m_marks.size();
     }
+    publishSnapshot();
 
     if (removed || verified)
         Logger::Info("XrayBypass", "verify: removed " + std::to_string(removed)
@@ -735,8 +749,17 @@ void XrayBypass::verifyStep()
 
 void XrayBypass::onRender2D()
 {
-    if (m_marks.empty())
+    // O(1) snapshot handoff: one shared_ptr copy under the lock, then the
+    // render thread reads an immutable list with no lock and no per-frame
+    // copy of up to 8000 marks.
+    std::shared_ptr<const std::vector<BlockMark>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(m_marksMutex);
+        snapshot = m_snapshot;
+    }
+    if (!snapshot || snapshot->empty())
         return;
+    const std::vector<BlockMark>& marks = *snapshot;
 
     const CommonData::RenderState rs = CommonData::GetRenderState();
     const ImGuiIO& io = ImGui::GetIO();
@@ -747,41 +770,16 @@ void XrayBypass::onRender2D()
 
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const bool fill = m_mode->index == 1;
-    const CommonData::PlayerSnapshot* self = nullptr;
 
-    std::vector<BlockMark> marks;
-    {
-        std::lock_guard<std::mutex> lock(m_marksMutex);
-        marks = m_marks;
-    }
-
-    // diagnostics: matrix + projection sanity, once per 5s (no JNI here —
-    // this runs on the render thread, data comes from CommonData cache)
+    // diagnostics: camera/projection sanity, no JNI here — this runs on the
+    // render thread and all data comes from the CommonData cache.
     static long long s_lastDrawDiag = 0;
-    static bool s_dumpedFull = false;
     if (nowMs() - s_lastDrawDiag > 5000)
     {
         s_lastDrawDiag = nowMs();
-        if (!s_dumpedFull && !marks.empty())
-        {
-            s_dumpedFull = true;
-            const Matrix& mv = rs.modelView;
-            const Matrix& pj = rs.projection;
-            Logger::Info("XrayBypass", "MV: " + std::to_string(mv.m00) + " " + std::to_string(mv.m01) + " " + std::to_string(mv.m02) + " " + std::to_string(mv.m03)
-                + " | " + std::to_string(mv.m10) + " " + std::to_string(mv.m11) + " " + std::to_string(mv.m12) + " " + std::to_string(mv.m13)
-                + " | " + std::to_string(mv.m20) + " " + std::to_string(mv.m21) + " " + std::to_string(mv.m22) + " " + std::to_string(mv.m23)
-                + " | " + std::to_string(mv.m30) + " " + std::to_string(mv.m31) + " " + std::to_string(mv.m32) + " " + std::to_string(mv.m33));
-            Logger::Info("XrayBypass", "PJ: " + std::to_string(pj.m00) + " " + std::to_string(pj.m01) + " " + std::to_string(pj.m02) + " " + std::to_string(pj.m03)
-                + " | " + std::to_string(pj.m10) + " " + std::to_string(pj.m11) + " " + std::to_string(pj.m12) + " " + std::to_string(pj.m13)
-                + " | " + std::to_string(pj.m20) + " " + std::to_string(pj.m21) + " " + std::to_string(pj.m22) + " " + std::to_string(pj.m23)
-                + " | " + std::to_string(pj.m30) + " " + std::to_string(pj.m31) + " " + std::to_string(pj.m32) + " " + std::to_string(pj.m33));
-            Logger::Info("XrayBypass", "mark0=" + std::to_string(marks.front().x) + "," + std::to_string(marks.front().y) + "," + std::to_string(marks.front().z)
-                + " camPos=" + std::to_string(rs.renderPos.x) + "," + std::to_string(rs.renderPos.y) + "," + std::to_string(rs.renderPos.z));
-        }
-        const Vector3 rel{ marks.empty() ? 0.0f : (marks.front().x - rs.camPos.x),
-                           marks.empty() ? 0.0f : (marks.front().y - rs.camPos.y),
-                           marks.empty() ? 0.0f : (marks.front().z - rs.camPos.z) };
-        const Vector4 view = CWorldToScreen::Multiply(Vector4{ rel.x, rel.y, rel.z, 1.0f }, rs.modelView);
+        const Vector3 rel{ marks.front().x - rs.camPos.x,
+                           marks.front().y - rs.camPos.y,
+                           marks.front().z - rs.camPos.z };
         Vector2 probe;
         const bool probed = CWorldToScreen::WorldToScreenVisible(
             rel, rs.modelView, rs.projection, sw, sh, probe);
@@ -789,13 +787,12 @@ void XrayBypass::onRender2D()
             + " proj.m00=" + std::to_string(rs.projection.m00)
             + " camPos=" + std::to_string(rs.camPos.x) + "," + std::to_string(rs.camPos.y)
             + "," + std::to_string(rs.camPos.z)
-            + " relView=" + std::to_string(view.x) + "," + std::to_string(view.y) + "," + std::to_string(view.z)
+            + " relView=" + std::to_string(rel.x) + "," + std::to_string(rel.y) + "," + std::to_string(rel.z)
             + " center=" + std::to_string(sw / 2) + "," + std::to_string(sh / 2)
             + " marks=" + std::to_string(marks.size())
             + " probeW2S=" + std::to_string(probed ? 1 : 0)
             + (probed ? (" -> " + std::to_string(probe.x) + "," + std::to_string(probe.y)) : std::string()));
     }
-
 
     const Vector3 cam = rs.camPos;
     for (const BlockMark& m : marks)
@@ -1279,6 +1276,7 @@ void XrayBypass::probeStep(long long now)
                         ++it;
                 }
             }
+            publishSnapshot();
             if (removed)
             {
                 m_probeRemovedCount += removed;
