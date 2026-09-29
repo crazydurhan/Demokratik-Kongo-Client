@@ -2,7 +2,6 @@
 
 #include "../../commonData.h"
 #include "friends.h"
-#include "piercing.h"
 #include "../../../menu/menu.h"
 #include "../../../sdk/jniResolve.h"
 #include "../../../patcher/patcher.h"
@@ -620,37 +619,6 @@ jobject CombatBridge::CrosshairEntity()
 	return env->NewLocalRef(inst);
 }
 
-bool CombatBridge::CrosshairOnFriend()
-{
-	if (!InGame() || !SDK::Minecraft) return false;
-	CMovingObjectPosition mop = SDK::Minecraft->GetMouseOver();
-	if (!mop.GetInstance() || !mop.IsTypeOfEntity()) return false;
-
-	CEntity entity = mop.GetEntity();
-	jobject entityObj = entity.GetInstance();
-	if (!entityObj) return false;
-
-	std::string name = entity.GetName();
-	return Friends::IsFriend(name);
-}
-
-void CombatBridge::RefreshMouseOverPost()
-{
-	if (!InGame() || !Piercing::IsActive()) return;
-
-	JNIEnv* env = Java::GetEnv();
-	if (!env || !StrayCache::EnsureEspBridge() || !StrayCache::espBridge_onGetMouseOverPost)
-		return;
-
-	float partial = 0.0f;
-	if (SDK::Minecraft && SDK::Minecraft->timer)
-		partial = SDK::Minecraft->timer->GetRenderPartialTicks();
-
-	env->CallStaticVoidMethod(StrayCache::espBridge_class,
-		StrayCache::espBridge_onGetMouseOverPost, partial);
-	JniResolve::ClearException(env);
-}
-
 void CombatBridge::SuppressHeldAttackInput()
 {
 	if (!InGame()) return;
@@ -685,20 +653,12 @@ void CombatBridge::PulseAttackClick()
 	JNIEnv* env = Java::GetEnv();
 	if (!env) return;
 
-	// Only refresh the Java-side raycast when piercing is active AND there's
-	// actually a friend under the crosshair.  Without this guard every click
-	// re-runs EntityRenderer.getMouseOver() through JNI — even during normal
-	// 1v1 combat where no friend is in the way — which desyncs the target and
-	// causes hits to miss (the "getting combo'd" symptom).
-	if (Piercing::IsActive() && CrosshairOnFriend())
-		RefreshMouseOverPost();
-
 	// Final self-check before we ask the game to call clickMouse().  Without
 	// this guard, if objectMouseOver somehow resolved to the local player
 	// (e.g. stale ref, Lunar wrapper) the game will happily send a
 	// C02PacketUseEntity(self) and the server kicks "Cannot interact with
 	// self".  Better to skip the click than to eat a kick.
-	if (Piercing::IsActive() || CrosshairOnEntity())
+	if (CrosshairOnEntity())
 	{
 		jobject localPlayer = SDK::Minecraft->GetThePlayerObject();
 		if (localPlayer)
@@ -885,7 +845,7 @@ void CombatBridge::ClearSyntheticAttackInput()
 	SuppressHeldAttackInput();
 }
 
-CombatBridge::EntityRayHit CombatBridge::RaycastEntity(float reachBlocks, bool skipFriends)
+CombatBridge::EntityRayHit CombatBridge::RaycastEntity(float reachBlocks)
 {
 	EntityRayHit result{};
 	if (!InGame() || reachBlocks <= 0.0f) return result;
@@ -915,8 +875,6 @@ CombatBridge::EntityRayHit CombatBridge::RaycastEntity(float reachBlocks, bool s
 		jobject ent = pd.obj.Instance.Get();
 		if (!ent) continue;
 		if (env->IsSameObject(ent, localPlayer)) continue;
-		// Combat piercing skips friends; middle-click friend toggle must not.
-		if (skipFriends && Piercing::IsActive() && Friends::IsFriend(pd.name)) continue;
 
 		const float partial = CommonData::renderPartialTicks;
 		Vector3 interp = pd.lastPos + (pd.pos - pd.lastPos) * partial;

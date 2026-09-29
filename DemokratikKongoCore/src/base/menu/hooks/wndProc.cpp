@@ -128,9 +128,8 @@ LRESULT CALLBACK hook_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
     if (msg == WM_MBUTTONDOWN)
     {
-        // Gated by the Friends module's "Middle click" setting.
-        // Use a C++ raycast that never skips friends — Piercing rewrites
-        // objectMouseOver so GetMouseOver() cannot hit friends while active.
+        // Gated by the Friends "Middle click" setting. A C++ raycast, so it
+        // always sees whatever objectMouseOver currently points at.
         if (!Menu::Open && isPlayerInGame() && Friends::MiddleClickEnabled())
         {
             // GetName() allocates a jstring plus intermediate objects. Bounding
@@ -139,7 +138,7 @@ LRESULT CALLBACK hook_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             JNIEnv* env = Java::GetEnv();
             JniResolve::LocalFrame frame(env, 32);
 
-            CombatBridge::EntityRayHit hit = CombatBridge::RaycastEntity(3.0f, /*skipFriends=*/false);
+            CombatBridge::EntityRayHit hit = CombatBridge::RaycastEntity(3.0f);
             if (hit.hit && hit.entity)
             {
                 if (env && StrayCache::entityPlayer_class

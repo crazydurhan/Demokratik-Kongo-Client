@@ -4,53 +4,16 @@
 #include "../sdk/jniResolve.h"
 #include "../java/java.h"
 
-#include "modules/render/esp3d.h"
-#include "modules/render/xrayBypass.h"
 #include "modules/render/nametags.h"
-#include "modules/render/nametags.h"
-#include "modules/render/arrayList.h"
-#include "modules/render/tracers.h"
-#include "modules/render/fullbright.h"
 #include "modules/render/itemEsp.h"
-#include "modules/render/noHurtCam.h"
-#include "modules/render/antiDebuff.h"
-#include "modules/render/healthDisplay.h"
-#include "modules/render/trajectories.h"
+#include "modules/render/cameraClip.h"
 #include "modules/utility/delayRemover.h"
 #include "modules/utility/fastPlace.h"
 #include "modules/utility/safeAutoArmor.h"
-#include "modules/combat/hitbox.h"
-#include "modules/combat/aimAssist.h"
-#include "modules/combat/reach.h"
-#include "modules/combat/knockbackDelay.h"
-#include "modules/combat/velocity.h"
-#include "modules/combat/combatBridge.h"
-#include "modules/combat/piercing.h"
-#include "modules/combat/antibot.h"
-#include "modules/combat/autoBlock.h"
-#include "modules/combat/backtrack.h"
-#include "modules/movement/sprint.h"
-#include "modules/utility/leftAutoClicker.h"
 #include "modules/utility/refill.h"
-#include "modules/utility/noInteract.h"
-#include "modules/utility/itemLock.h"
-#include "modules/utility/autoTool.h"
-#include "modules/utility/fastMine.h"
-#include "modules/misc/macros.h"
 #include "modules/utility/itemLogger.h"
-
-#include "modules/movement/invMove.h"
-#include "modules/movement/safeWalk.h"
-#include "modules/utility/chestStealer.h"
-#include "modules/render/targetHud.h"
-#include "modules/render/cameraClip.h"
-#include "modules/render/freelook.h"
-#include "modules/render/fallView.h"
-#include "modules/render/damageTags.h"
-#include "modules/misc/latencyAlerts.h"
-#include "modules/utility/blink.h"
-#include "modules/utility/fakeLag.h"
-#include "modules/player/freecam.h"
+#include "modules/misc/macros.h"
+#include "modules/combat/combatBridge.h"
 
 #include "../util/rotationHelper.h"
 #include "../util/logger.h"
@@ -168,58 +131,19 @@ void ModuleManager::Init()
     m.clear();
 
     // Render
-    registerModule<Esp3D>();
-    registerModule<XrayBypass>();
     registerModule<NameTags>();
-    registerModule<ArrayList>();
-    registerModule<Tracers>();
-    registerModule<Fullbright>();
     registerModule<ItemESP>();
-    registerModule<NoHurtCam>();
-    registerModule<AntiDebuff>();
-    registerModule<HealthDisplay>();
-    registerModule<Trajectories>();
-    registerModule<TargetHUD>();
     registerModule<CameraClip>();
-    registerModule<Freelook>();
-    registerModule<FallView>();
-    registerModule<DamageTags>();
-
-    // Combat
-    registerModule<Hitbox>();
-    registerModule<AimAssist>();
-    registerModule<Reach>();
-    registerModule<KnockbackDelay>();
-    registerModule<Velocity>();
-    registerModule<Piercing>();
-    registerModule<AntiBot>();
-    registerModule<AutoBlock>();
-    registerModule<Backtrack>();
-    registerModule<LeftAutoClicker>();
-
-    // Movement
-    registerModule<Sprint>();
-    registerModule<InvMove>();
-    registerModule<SafeWalk>();
 
     // Utility
     registerModule<DelayRemover>();
     registerModule<FastPlace>();
     registerModule<SafeAutoArmor>();
     registerModule<Refill>();
-    registerModule<NoInteract>();
-    registerModule<ItemLock>();
     registerModule<ItemLogger>();
-    registerModule<AutoTool>();
-    registerModule<FastMine>();
-    registerModule<ChestStealer>();
-    registerModule<Blink>();
-    registerModule<FakeLag>();
-    registerModule<Freecam>();
 
     // Misc
     registerModule<Macros>();
-    registerModule<LatencyAlerts>();
 
     std::unordered_set<std::string> seenNames;
     for (const auto& mod : m) {
@@ -256,8 +180,8 @@ void ModuleManager::RunPatcherTick()
 		return;
 	Patcher::Tick();
 
-	// Surface hook state transitions — the flag-only modules (ESP, Velocity,
-	// Reach, ...) silently go inert whenever retransforms are not applied.
+	// Surface hook state transitions — the flag-only modules silently go inert
+	// whenever retransforms are not applied.
 	static bool s_wasReady = false;
 	static bool s_announcedDown = false;
 	const bool ready = Patcher::IsReady();
@@ -304,8 +228,8 @@ void ModuleManager::RunModuleTicks()
 		}
 	}
 
-	// Non-toggleable modules (e.g. Friends) always tick so shared state
-	// like esp_friends stays synced for Java hooks (Piercing, ESP, ...).
+	// Non-toggleable modules always tick, even when disabled, so the shared
+	// state they publish into the Patcher stays synced for the Java hooks.
 	for (auto& mod : storage())
 	{
 		if (!mod->toggleable() || mod->isEnabled())
@@ -356,8 +280,8 @@ void ModuleManager::OnRender3D(float partialTicks)
 
 void ModuleManager::OnGameTick()
 {
-    // Walking-update pre (client thread): keep movement inputs applied after
-    // vanilla movement processing so InvMove/SafeWalk stick for the tick.
+    // Walking-update pre (client thread): apply queued movement inputs after
+    // vanilla movement processing so they stick for the tick.
     CombatBridge::DrainPendingInputs();
 }
 
@@ -379,7 +303,7 @@ void ModuleManager::OnRunTickPre()
     CombatBridge::DrainUrgentInputs();
 
     // getMouseOver can fire every frame; runTick once per tick. Cap work ~20 Hz
-    // so dual hooks (or high FPS) do not over-drive Aim/AC drain.
+    // so dual hooks (or high FPS) do not over-drive the drain.
     {
         static long long s_lastWorkMs = 0;
         const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -387,24 +311,6 @@ void ModuleManager::OnRunTickPre()
         if (now - s_lastWorkMs < 45)
             return;
         s_lastWorkMs = now;
-    }
-
-    // AimAssist no longer ticks here — it applies per frame via onRender3D.
-
-    if (FastMine* fm = Get<FastMine>())
-    {
-        if (fm->isEnabled())
-            fm->clientTick();
-    }
-    if (ChestStealer* cs = Get<ChestStealer>())
-    {
-        if (cs->isEnabled())
-            cs->clientTick();
-    }
-    if (AutoTool* at = Get<AutoTool>())
-    {
-        if (at->isEnabled())
-            at->clientTick();
     }
 
     CombatBridge::DrainPendingInputs();

@@ -45,12 +45,6 @@ namespace CombatBridge
 
 	jobject CrosshairEntity();
 
-	// Returns true when the entity under the crosshair is on the friend list.
-	bool CrosshairOnFriend();
-
-	// Re-run EspBridge piercing raycast so objectMouseOver is fresh before attack.
-	void RefreshMouseOverPost();
-
 	// AutoClicker: vanilla KeyBinding pulse on client thread (pre position packet).
 	void PulseAttackClick();
 
@@ -69,11 +63,8 @@ namespace CombatBridge
 
 	// --- Client-thread actuation queue (worker decides, drain applies) ---
 	void RequestBlock(bool pressed);
-	// InvMove: drives the real movement KeyBinding pressed states (vanilla
-	// updatePlayerMoveState picks them up even while a GUI screen is open).
 	void RequestMoveKeyStates(bool forward, bool back, bool left, bool right, bool jump);
 	void ClearMoveKeyStates();
-	// SafeWalk: presses/releases the sneak keybind on the client thread.
 	void RequestSneak(bool pressed);
 	void RequestZeroMotionXZ();
 	void RequestHotbarSlot(int slot); // 0-8
@@ -82,11 +73,9 @@ namespace CombatBridge
 	void RequestJumpTicksZero();
 
 	// Vanilla-style entity ray trace (eyes + look * reach). Closest intercept wins.
-	// When skipFriends is true and Piercing is active, friends are ignored (combat).
-	// Middle-click friend toggle must pass skipFriends=false.
-	EntityRayHit RaycastEntity(float reachBlocks, bool skipFriends = true);
+	// Used by the middle-click friend toggle, which needs friends to be hittable.
+	EntityRayHit RaycastEntity(float reachBlocks);
 
-	// Tracks recent hits on crosshair players; feeds combat_targeting_active for Velocity/KBD.
 	void TickTargetingTrack();
 	bool IsRecentlyAttackingPlayer();
 }
