@@ -1,5 +1,10 @@
 #include "moduleManager.h"
 
+// CommonData:: is used directly below (SanityCheck / UpdateData /
+// RefreshRenderState). It used to arrive transitively through esp3d.h, which
+// is gone; include what you use rather than relying on a module header.
+#include "commonData.h"
+
 #include "../util/keybindUtil.h"
 #include "../sdk/jniResolve.h"
 #include "../java/java.h"
