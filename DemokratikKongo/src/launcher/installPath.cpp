@@ -7,7 +7,11 @@
 
 namespace dk {
 
-std::wstring payloadExtractPath(uint64_t embeddedContentHash)
+namespace {
+constexpr wchar_t kAgentJarName[] = L"RuntimeHostAgent.jar";
+} // namespace
+
+std::wstring payloadDirectory(uint64_t embeddedContentHash)
 {
     wchar_t tempBuf[MAX_PATH]{};
     const DWORD tempLen = GetTempPathW(MAX_PATH, tempBuf);
@@ -24,6 +28,14 @@ std::wstring payloadExtractPath(uint64_t embeddedContentHash)
     swprintf_s(hashHex, L"%016llx", static_cast<unsigned long long>(embeddedContentHash));
     root += hashHex;
     root += L'\\';
+    return root;
+}
+
+std::wstring payloadExtractPath(uint64_t embeddedContentHash)
+{
+    const std::wstring root = payloadDirectory(embeddedContentHash);
+    if (root.empty())
+        return L"";
 
     std::error_code ec;
     std::filesystem::create_directories(root, ec);
@@ -31,6 +43,14 @@ std::wstring payloadExtractPath(uint64_t embeddedContentHash)
         return L"";
 
     return root + stealth::kPayloadDll;
+}
+
+std::wstring agentJarPath(uint64_t embeddedContentHash)
+{
+    const std::wstring root = payloadDirectory(embeddedContentHash);
+    if (root.empty())
+        return L"";
+    return root + kAgentJarName;
 }
 
 std::wstring siblingPayloadPath()

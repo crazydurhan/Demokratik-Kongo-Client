@@ -22,6 +22,7 @@
 
 #include "../util/rotationHelper.h"
 #include "../util/logger.h"
+#include "../license/licenseGate.h"
 #include "../buildVersion.h"
 #include "../menu/menu.h"
 #include "../patcher/patcher.h"
@@ -181,6 +182,11 @@ void ModuleManager::RunPatcherTick()
 	// (deferred from Menu::Init so inject hits the render thread mid-game).
 	Menu::EnsureRenderHooks();
 
+	// Licence gate: keep the GUI hooks alive so a locked client can still
+	// show why it is locked, but apply no bytecode patches while unverified.
+	if (!LicenseGate::Active())
+		return;
+
 	if (!StrayCache::IsReady())
 		return;
 	Patcher::Tick();
@@ -250,12 +256,18 @@ void ModuleManager::RunModuleTicks()
 void ModuleManager::UpdateModules()
 {
 	RunPatcherTick();
+	if (!LicenseGate::Active())
+		return;
 	RunDataUpdate();
 	RunModuleTicks();
 }
 
 void ModuleManager::OnRender2D()
 {
+    // Licence gate: module HUD output is the product being licensed.
+    if (!LicenseGate::Active())
+        return;
+
     // Hold the storage lock during dispatch (see g_modulesMutex note).
     std::lock_guard<std::mutex> lock(g_modulesMutex);
     for (auto& mod : storage())
@@ -265,6 +277,10 @@ void ModuleManager::OnRender2D()
 
 void ModuleManager::OnRender3D(float partialTicks)
 {
+    // Licence gate: world-space output is the product being licensed.
+    if (!LicenseGate::Active())
+        return;
+
     // Invoked from the JVM via the ClassPatcher render-world-pass hook.
     // Runs inside Minecraft's GL world matrix, so modules can issue
     // raw OpenGL calls in camera/world space.
@@ -285,6 +301,10 @@ void ModuleManager::OnRender3D(float partialTicks)
 
 void ModuleManager::OnGameTick()
 {
+    // Licence gate: movement input application is a feature.
+    if (!LicenseGate::Active())
+        return;
+
     // Walking-update pre (client thread): apply queued movement inputs after
     // vanilla movement processing so they stick for the tick.
     CombatBridge::DrainPendingInputs();
@@ -301,6 +321,10 @@ void ModuleManager::OnRunTickPre()
     std::lock_guard<std::mutex> lock(g_modulesMutex);
 
     Patcher::NoteRunTickPre();
+
+    // Licence gate: input drains and delay removers are features.
+    if (!LicenseGate::Active())
+        return;
 
     // DelayRemover's NoHitDelay/NoJumpDelay must apply within the frame — the
     // 45ms gate below would leave leftClickCounter non-zero for several frames

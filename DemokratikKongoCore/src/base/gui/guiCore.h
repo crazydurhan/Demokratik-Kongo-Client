@@ -165,6 +165,7 @@ namespace Gui
         ImU32 background;
         ImU32 sidebar;
         ImU32 panel;
+        ImU32 panelSoft;   // hover state for panels (between panel and cardHover)
         ImU32 card;
         ImU32 cardHover;
         ImU32 widget;
@@ -175,6 +176,7 @@ namespace Gui
         ImU32 textDim;
         ImU32 textMute;
         ImU32 accent;
+        ImU32 accent2;      // secondary accent (themes are flat: accent2 == accent)
         ImU32 accentSoft;
         ImU32 onAccent;
         ImU32 good;
@@ -192,7 +194,7 @@ namespace Gui
     // profile serialiser can read and write it without touching layout code.
     struct Preferences
     {
-        float accent[3] = { 103.0f / 255.0f, 100.0f / 255.0f, 255.0f / 255.0f };
+        float accent[3] = { 47.0f / 255.0f, 128.0f / 255.0f, 237.0f / 255.0f };  // #2F80ED Sky
         bool  reduceMotion = false;
         bool  showDescriptions = true;
         bool  notifyOnToggle = true;
@@ -233,6 +235,16 @@ namespace Gui
     {
         const float a = Clamp01(alpha) * static_cast<float>((color >> IM_COL32_A_SHIFT) & 0xFF);
         return (color & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+    }
+
+    // Brighten/darken a packed colour by amount (-1..1; negative = darken).
+    inline ImU32 brighten(ImU32 color, float amount)
+    {
+        const float k = amount * 255.0f;
+        const float r = std::min(255.0f, std::max(0.0f, static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) + k));
+        const float g = std::min(255.0f, std::max(0.0f, static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) + k));
+        const float b = std::min(255.0f, std::max(0.0f, static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF) + k));
+        return IM_COL32((ImU32)r, (ImU32)g, (ImU32)b, (color >> IM_COL32_A_SHIFT) & 0xFF);
     }
 
     // Fades a hard coded colour with the current menu opacity.

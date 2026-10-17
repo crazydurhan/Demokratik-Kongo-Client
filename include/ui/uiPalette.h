@@ -3,40 +3,42 @@
 // The one colour palette both binaries draw from. The launcher uses these
 // values directly; the ClickGUI seeds its runtime (accent-editable, opacity-
 // faded) palette from them, so the launcher and the in-game menu always agree
-// on the same dark indigo look.
+// on the same ArifClient-style flat dark look.
 
 #include "imgui.h"
 
 namespace dk::ui::palette {
 
-// Surfaces, darkest to lightest.
-constexpr ImU32 kBackground  = IM_COL32(13,  13,  18,  255);
-constexpr ImU32 kSidebar     = IM_COL32(17,  17,  23,  255);
-constexpr ImU32 kPanel       = IM_COL32(21,  21,  28,  255);
-constexpr ImU32 kCard        = IM_COL32(27,  27,  36,  255);
-constexpr ImU32 kCardHover   = IM_COL32(34,  34,  45,  255);
-constexpr ImU32 kWidget      = IM_COL32(30,  30,  41,  255);
+// Surfaces, darkest to lightest (ArifClient flat palette).
+constexpr ImU32 kBackground  = IM_COL32(15,  15,  18,  255);  // #0F0F12
+constexpr ImU32 kSidebar     = IM_COL32(15,  15,  18,  255);  // same as bg (flat)
+constexpr ImU32 kPanel       = IM_COL32(23,  23,  28,  255);  // #17171C
+constexpr ImU32 kPanelSoft   = IM_COL32(31,  31,  38,  255);  // #1F1F26 (hover)
+constexpr ImU32 kCard        = IM_COL32(27,  27,  33,  255);  // #1B1B21
+constexpr ImU32 kCardHover   = IM_COL32(32,  32,  39,  255);  // #202027
+constexpr ImU32 kWidget      = IM_COL32(31,  31,  38,  255);  // #1F1F26 (same as panelSoft)
 constexpr ImU32 kWidgetHover = IM_COL32(38,  38,  51,  255);
-constexpr ImU32 kBorder      = IM_COL32(42,  42,  55,  255);
-constexpr ImU32 kLine        = IM_COL32(36,  36,  47,  255);
+constexpr ImU32 kBorder      = IM_COL32(38,  38,  44,  255);  // #26262C
+constexpr ImU32 kLine        = IM_COL32(38,  38,  44,  255);  // same as border
 
 // Text.
-constexpr ImU32 kText     = IM_COL32(237, 237, 244, 255);
-constexpr ImU32 kTextDim  = IM_COL32(150, 149, 170, 255);
-constexpr ImU32 kTextMute = IM_COL32(100, 99,  122, 255);
+constexpr ImU32 kText     = IM_COL32(255, 255, 255, 255);  // #FFFFFF
+constexpr ImU32 kTextDim  = IM_COL32(138, 138, 147, 255);  // #8A8A93
+constexpr ImU32 kTextMute = IM_COL32(107, 107, 116, 255);  // #6B6B74
 
-// Accent (indigo) and semantic colours.
-constexpr float kAccentR = 103.0f / 255.0f;
-constexpr float kAccentG = 100.0f / 255.0f;
-constexpr float kAccentB = 255.0f / 255.0f;
+// Accent (Sky blue) and semantic colours.
+constexpr float kAccentR = 47.0f  / 255.0f;
+constexpr float kAccentG = 128.0f / 255.0f;
+constexpr float kAccentB = 237.0f / 255.0f;
 
-constexpr ImU32 kAccent     = IM_COL32(103, 100, 255, 255);
-constexpr ImU32 kAccentSoft = IM_COL32(103, 100, 255, 46);
-constexpr ImU32 kAccentGlow = IM_COL32(140, 137, 255, 255);
+constexpr ImU32 kAccent     = IM_COL32(47,  128, 237, 255);  // #2F80ED
+constexpr ImU32 kAccent2    = IM_COL32(47,  128, 237, 255);  // flat: accent2 == accent
+constexpr ImU32 kAccentSoft = IM_COL32(47,  128, 237, 46);
+constexpr ImU32 kAccentGlow = IM_COL32(74,  150, 244, 255);
 constexpr ImU32 kOnAccent   = IM_COL32(255, 255, 255, 255);
-constexpr ImU32 kGood       = IM_COL32(76,  207, 132, 255);
-constexpr ImU32 kWarning    = IM_COL32(240, 178, 74,  255);
-constexpr ImU32 kDanger     = IM_COL32(243, 101, 109, 255);
+constexpr ImU32 kGood       = IM_COL32(52,  211, 153, 255);  // #34D399
+constexpr ImU32 kWarning    = IM_COL32(251, 191, 36,  255);  // #FBBF24
+constexpr ImU32 kDanger     = IM_COL32(248, 113, 113, 255);  // #F87171
 
 // Multiply an existing packed colour by an alpha factor (0..1).
 inline ImU32 Alpha(ImU32 color, float alpha)

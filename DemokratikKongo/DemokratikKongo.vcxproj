@@ -60,7 +60,7 @@
       <PreprocessorDefinitions>_DEBUG;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(SolutionDir)DemokratikKongoCore\ext\json;$(SolutionDir)include\licenseShared;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -84,7 +84,7 @@ copy /Y "$(TargetPath)" "$(SolutionDir)build\RuntimeHost.exe"</Command>
       <PreprocessorDefinitions>NDEBUG;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(SolutionDir)DemokratikKongoCore\ext\json;$(SolutionDir)include\licenseShared;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -103,9 +103,15 @@ copy /Y "$(TargetPath)" "$(SolutionDir)build\RuntimeHost.exe"</Command>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="resources\resource.h" />
+    <ClInclude Include="src\launcher\agentJarData.h" />
     <ClInclude Include="src\launcher\installPath.h" />
     <ClInclude Include="src\launcher\injector.h" />
     <ClInclude Include="src\launcher\launcherApp.h" />
+    <ClInclude Include="src\launcher\licenseClient.h" />
+    <ClInclude Include="$(SolutionDir)include\licenseShared\licenseToken.h" />
+    <ClInclude Include="$(SolutionDir)include\licenseShared\licensePublicKey.h" />
+    <ClInclude Include="src\launcher\hashUtils.h" />
+    <ClInclude Include="src\launcher\coreUpdater.h" />
     <ClInclude Include="src\launcher\launcherGui.h" />
     <ClInclude Include="src\launcher\logger.h" />
     <ClInclude Include="src\launcher\payloadDiagnostics.h" />
@@ -123,6 +129,11 @@ copy /Y "$(TargetPath)" "$(SolutionDir)build\RuntimeHost.exe"</Command>
     <ClCompile Include="src\launcher\installPath.cpp" />
     <ClCompile Include="src\launcher\injector.cpp" />
     <ClCompile Include="src\launcher\launcherApp.cpp" />
+    <ClCompile Include="src\launcher\licenseClient.cpp" />
+    <ClCompile Include="$(SolutionDir)include\licenseShared\licenseToken.cpp" />
+    <ClCompile Include="$(SolutionDir)include\licenseShared\tweetnacl.c" />
+    <ClCompile Include="src\launcher\hashUtils.cpp" />
+    <ClCompile Include="src\launcher\coreUpdater.cpp" />
     <ClCompile Include="src\launcher\launcherGui.cpp" />
     <ClCompile Include="src\launcher\logger.cpp" />
     <ClCompile Include="src\launcher\payloadDiagnostics.cpp" />

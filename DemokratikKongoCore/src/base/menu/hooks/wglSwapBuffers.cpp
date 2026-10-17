@@ -19,6 +19,9 @@
 #include "../../../../ext/fonts/fa_solid.h"
 #include "../../../../ext/fonts/jetbrainsmono.h"
 
+// DK-PORT: vendored arifclient ClickGUI host (style/fonts/icons + frame render).
+#include "../../gui/arifHost.h"
+
 #include "../../base.h"
 
 std::atomic<bool> g_imguiSetupDone{ false };
@@ -88,6 +91,10 @@ bool __stdcall hook_wglSwapBuffers(_In_ HDC hdc)
 		// the overlay lost its texture after a resize, producing broken/blank
 		// frames. Rebuilding MenuGLContext and initialising ImGui INTO it fixes
 		// both issues.)
+		// DK-PORT: the overlay GL context (and with it every icon texture)
+		// is about to die; let the arif GUI re-upload its pack afterwards.
+		ArifGUI::OnGLContextLost();
+
 		if (Menu::MenuGLContext)
 		{
 			wglDeleteContext(Menu::MenuGLContext);
@@ -99,6 +106,7 @@ bool __stdcall hook_wglSwapBuffers(_In_ HDC hdc)
 		{
 			ImGui_ImplWin32_Init(Menu::HandleWindow);
 			ImGui_ImplOpenGL2_Init();
+			ArifGUI::OnGLContextRestored();
 			wglMakeCurrent(hdc, Menu::OriginalGLContext);
 		}
 
@@ -334,6 +342,9 @@ void Menu::SetupImgui()
 	if (!Menu::MenuGLContext)
 	{
 		Logger::Error("Menu", "SetupImgui: wglCreateContext failed — overlay disabled this frame");
+		// Allow the hook to retry setup on a later frame (mirrors the
+		// wglMakeCurrent failure branch below).
+		g_imguiSetupDone.store(false, std::memory_order_release);
 		return;
 	}
 	if (!wglMakeCurrent(Menu::HandleDeviceContext, Menu::MenuGLContext))
@@ -458,4 +469,9 @@ void Menu::SetupImgui()
 
 
 	Menu::Initialized = true;
+
+	// DK-PORT: build the vendored arifclient ClickGUI - style, embedded fonts
+	// and icon textures. The overlay GL context is current here, so the icon
+	// uploads land in the right context and happen before the first frame.
+	ArifGUI::Init();
 }

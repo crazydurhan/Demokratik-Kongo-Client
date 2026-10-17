@@ -12,6 +12,8 @@
 #include "../util/keybindUtil.h"
 #include "../util/trimmer.h"
 
+#include "arifHost.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -483,10 +485,10 @@ namespace
         // Card body: hover lift + accent wash when the module is running.
         const ImU32 body = Mix(Mix(c.card, c.cardHover, state->hover),
                                Mix(c.card, c.accent, 0.16f), state->on);
-        dl->AddRectFilled(cardMin, cardMax, body, 11.0f);
+        dl->AddRectFilled(cardMin, cardMax, body, 10.0f);
         if (state->on > 0.01f)
         {
-            dl->AddRect(cardMin, cardMax, Alpha(c.accent, 0.42f * state->on), 11.0f, 0, 1.0f);
+            dl->AddRect(cardMin, cardMax, Alpha(c.accent, 0.42f * state->on), 10.0f, 0, 1.0f);
             dl->AddRectFilled(ImVec2(cardMin.x, cardMin.y + 15.0f),
                               ImVec2(cardMin.x + 3.0f, cardMin.y + kCardHeaderHeight - 15.0f),
                               Alpha(c.accent, state->on), 2.0f);
@@ -495,7 +497,7 @@ namespace
         // Icon tile.
         const ImVec2 tileMin(cardMin.x + 14.0f, cardMin.y + 11.0f);
         const ImVec2 tileMax(tileMin.x + 44.0f, tileMin.y + 44.0f);
-        dl->AddRectFilled(tileMin, tileMax, Mix(c.widget, c.accent, state->on * 0.9f), 11.0f);
+        dl->AddRectFilled(tileMin, tileMax, Mix(c.widget, c.accent, state->on * 0.9f), 10.0f);
         DrawIcon(dl, IconForModule(module->name(), static_cast<int>(module->category())),
                  ImVec2((tileMin.x + tileMax.x) * 0.5f, (tileMin.y + tileMax.y) * 0.5f),
                  19.0f,
@@ -1564,7 +1566,9 @@ namespace
 
 void Gui::InitializeStyle()
 {
-    ApplyImGuiStyle();
+    // DK-PORT: the legacy ImGui style used to clobber the arif theme on the
+    // first frame; the vendored GUI owns ImGui style setup now
+    // (arif::gui::SetupGUIStyle, called from ArifGUI::Init()).
     g.styled = true;
 }
 
@@ -1580,202 +1584,19 @@ void Gui::Render()
     if (!Menu::Initialized)
         return;
 
-    if (!g.styled)
-        InitializeStyle();
-
     MotionMultiplier() = ReduceMotion() ? 60.0f : 1.0f;
 
-    // Keep animating while the menu closes so it can fade out.
-    Ease(g.openAnim, Menu::Open ? 1.0f : 0.0f, 17.0f);
+    // DK-PORT: the ClickGUI is the vendored arifclient GUI (arifHost.cpp).
+    // It draws its own backdrop, open/close animation, top bar and panels;
+    // Menu::Open is its source of truth for visibility.
+    ArifGUI::Render();
 
     // Toasts keep running even when the menu is hidden.
     const ImVec2 screenAnchor(ImGui::GetIO().DisplaySize.x - 22.0f,
                               ImGui::GetIO().DisplaySize.y - 22.0f);
-
-    if (!Menu::Open && g.openAnim < 0.004f)
-    {
-        SetGlobalOpacity(0.0f);
-        DrawNotifications(screenAnchor);
-        return;
-    }
-
-    const float opacity = SmoothStep(g.openAnim);
-    SetGlobalOpacity(opacity);
-
-    DrawBackdrop(opacity);
-
-    const Palette& c = Colors();
-    ImGuiIO& io = ImGui::GetIO();
-
-    const ImVec2 size(986.0f, 618.0f);
-    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - size.x) * 0.5f,
-                                   (io.DisplaySize.y - size.y) * 0.5f),
-                            ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(880.0f, 540.0f), ImVec2(1700.0f, 1100.0f));
-    ImGui::SetNextWindowBgAlpha(0.0f);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opacity);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    // Rows are laid out flush and spaced explicitly, so ImGui must not add
-    // any of its own vertical spacing between items.
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoTitleBar |
-        ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoSavedSettings;
-
-    if (ImGui::Begin("##DemokratikKongoGui", &Menu::Open, flags))
-    {
-        const ImVec2 wp = ImGui::GetWindowPos();
-        const ImVec2 ws = ImGui::GetWindowSize();
-        const float rise = (1.0f - opacity) * 16.0f;
-
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImVec2 winMin(wp.x, wp.y + rise);
-        const ImVec2 winMax(wp.x + ws.x, wp.y + ws.y + rise);
-
-        ImGui::GetBackgroundDrawList()->AddShadowRect(
-            winMin, winMax, Alpha(IM_COL32(0, 0, 0, 190), opacity), 56.0f, ImVec2(0.0f, 14.0f),
-            ImDrawFlags_ShadowCutOutShapeBackground, 15.0f);
-
-        const bool showSidebar = (g.shell == Shell_Home) || (g.search[0] != '\0');
-        const float sidebarW = showSidebar ? kSidebarWidth : 0.0f;
-
-        // Full window + continuous top bar share the same fill so Home's left/right
-        // top chrome never shows the darker sidebar plate.
-        dl->AddRectFilled(winMin, winMax, c.background, 15.0f);
-        if (showSidebar)
-        {
-            dl->AddRectFilled(ImVec2(winMin.x, winMin.y + kTopBarHeight),
-                              ImVec2(winMin.x + sidebarW, winMax.y), c.sidebar, 15.0f,
-                              ImDrawFlags_RoundCornersBottomLeft);
-            dl->AddLine(ImVec2(winMin.x + sidebarW, winMin.y + kTopBarHeight),
-                        ImVec2(winMin.x + sidebarW, winMax.y - 1.0f), Alpha(c.line, 0.95f), 1.0f);
-        }
-        dl->AddLine(ImVec2(winMin.x, winMin.y + kTopBarHeight),
-                    ImVec2(winMax.x, winMin.y + kTopBarHeight), Alpha(c.line, 0.95f), 1.0f);
-        dl->AddRect(winMin, winMax, Alpha(c.border, 0.9f), 15.0f, 0, 1.0f);
-
-        // ---------------------------------------------------- top shell tabs
-        ImGui::SetCursorScreenPos(ImVec2(winMin.x + 16.0f, winMin.y + 14.0f));
-        ImGui::BeginGroup();
-        if (ExpandingTab("##home", "Home", Icon::Home, g.shell == Shell_Home, 36.0f))
-        {
-            g.shell = Shell_Home;
-            g.search[0] = '\0';
-        }
-        ImGui::SameLine(0.0f, 8.0f);
-        if (ExpandingTab("##friends", "Friends", Icon::Users, g.shell == Shell_Friends, 36.0f))
-        {
-            g.shell = Shell_Friends;
-            g.search[0] = '\0';
-        }
-        ImGui::SameLine(0.0f, 8.0f);
-        if (ExpandingTab("##configs", "Configs", Icon::Folder, g.shell == Shell_Config, 36.0f))
-        {
-            g.shell = Shell_Config;
-            g.search[0] = '\0';
-        }
-        ImGui::SameLine(0.0f, 8.0f);
-        if (ExpandingTab("##settings", "Settings", Icon::Gear, g.shell == Shell_Settings, 36.0f))
-        {
-            g.shell = Shell_Settings;
-            g.search[0] = '\0';
-        }
-        ImGui::EndGroup();
-
-        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 56.0f, winMin.y + 16.0f));
-        if (IconButton("##close", Icon::Close, 32.0f, false))
-            Menu::Open = false;
-
-        const float contentX = winMin.x + sidebarW;
-        const float searchMaxW = std::max(140.0f, std::min(280.0f, ws.x - sidebarW - 420.0f));
-        ImGui::SetCursorScreenPos(ImVec2(winMax.x - 72.0f - searchMaxW, winMin.y + 16.0f));
-        SearchField("##search", g.search, sizeof(g.search), searchMaxW, 32.0f);
-
-        // ------------------------------------------- left category rail (Home)
-        if (showSidebar)
-        {
-            ImGui::SetCursorScreenPos(ImVec2(winMin.x + 10.0f, winMin.y + kTopBarHeight + 14.0f));
-            ImGui::BeginGroup();
-            for (int i = 0; i < kNavCount; ++i)
-            {
-                if (CategoryRailItem(kNav[i].label, kNav[i].icon,
-                                     g.shell == Shell_Home && g.search[0] == '\0' && g.category == i,
-                                     kSidebarWidth - 20.0f, 44.0f))
-                {
-                    g.shell = Shell_Home;
-                    g.category = i;
-                    g.search[0] = '\0';
-                }
-                ImGui::Dummy(ImVec2(0.0f, 2.0f));
-            }
-
-            DrawActiveModuleGrid(kSidebarWidth - 20.0f);
-            ImGui::EndGroup();
-        }
-
-        // --------------------------------------------------------- content
-        const int viewKey = (g.search[0] ? 1000 : 0) + g.shell * 10 + g.category;
-        if (g.lastView != viewKey)
-        {
-            g.lastView = viewKey;
-            g.pageFade = 0.0f;
-        }
-        Ease(g.pageFade, 1.0f, 11.0f);
-        const float fade = SmoothStep(g.pageFade);
-
-        const char* title = "Home";
-        if (g.search[0])
-            title = "Search results";
-        else if (g.shell == Shell_Friends)
-            title = "Friends";
-        else if (g.shell == Shell_Config)
-            title = "Configs";
-        else if (g.shell == Shell_Settings)
-            title = "Settings";
-        else if (g.category >= 0 && g.category < kNavCount)
-            title = kNav[g.category].label;
-
-        Text(dl, FontRegular(), 15.0f,
-             ImVec2(contentX + kContentPad, winMin.y + kTopBarHeight + 16.0f + (1.0f - fade) * 6.0f),
-             Alpha(c.text, fade), title);
-
-        ImGui::SetCursorScreenPos(ImVec2(contentX + kContentPad,
-                                         winMin.y + kTopBarHeight + 44.0f + (1.0f - fade) * 10.0f));
-
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opacity * fade);
-        ImGui::BeginChild("##content",
-                          ImVec2(ws.x - sidebarW - kContentPad * 2.0f,
-                                 std::max(80.0f, ws.y - kTopBarHeight - 62.0f)),
-                          0, ImGuiWindowFlags_NoBackground);
-
-        if (g.search[0] != '\0')
-            DrawModuleList();
-        else if (g.shell == Shell_Settings)
-            DrawSettingsPage();
-        else if (g.shell == Shell_Friends)
-            DrawFriendsPage();
-        else if (g.shell == Shell_Config)
-            DrawConfigPage();
-        else
-            DrawModuleList();
-
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-    }
-    ImGui::End();
-
     DrawNotifications(screenAnchor);
     DrawTooltip();
-
-    ImGui::PopStyleVar(3);
 }
-
 void Gui::RenderFakeLogin()
 {
     if (!Menu::Initialized)

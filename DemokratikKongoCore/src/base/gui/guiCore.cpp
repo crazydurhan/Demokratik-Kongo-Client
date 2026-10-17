@@ -14,27 +14,29 @@ namespace Gui
         constexpr float kPi = 3.14159265358979323846f;
 
         Palette g_palette = {
-            IM_COL32(13,  13,  18,  255),   // background
-            IM_COL32(17,  17,  23,  255),   // sidebar
-            IM_COL32(21,  21,  28,  255),   // panel
-            IM_COL32(27,  27,  36,  255),   // card
-            IM_COL32(34,  34,  45,  255),   // cardHover
-            IM_COL32(30,  30,  41,  255),   // widget
+            IM_COL32(15,  15,  18,  255),   // background  (#0F0F12 — flat, no gradient)
+            IM_COL32(15,  15,  18,  255),   // sidebar     (same as bg — flat)
+            IM_COL32(23,  23,  28,  255),   // panel       (#17171C)
+            IM_COL32(31,  31,  38,  255),   // panelSoft   (#1F1F26 — hover)
+            IM_COL32(27,  27,  33,  255),   // card        (#1B1B21)
+            IM_COL32(32,  32,  39,  255),   // cardHover   (#202027)
+            IM_COL32(31,  31,  38,  255),   // widget      (#1F1F26 — same as panelSoft)
             IM_COL32(38,  38,  51,  255),   // widgetHover
-            IM_COL32(42,  42,  55,  255),   // border
-            IM_COL32(36,  36,  47,  255),   // line
-            IM_COL32(237, 237, 244, 255),   // text
-            IM_COL32(150, 149, 170, 255),   // textDim
-            IM_COL32(100, 99,  122, 255),   // textMute
-            IM_COL32(103, 100, 255, 255),   // accent
-            IM_COL32(103, 100, 255, 46),    // accentSoft
+            IM_COL32(38,  38,  44,  255),   // border       (#26262C)
+            IM_COL32(38,  38,  44,  255),   // line         (same as border)
+            IM_COL32(255, 255, 255, 255),   // text         (#FFFFFF — pure white)
+            IM_COL32(138, 138, 147, 255),   // textDim      (#8A8A93)
+            IM_COL32(107, 107, 116, 255),   // textMute     (#6B6B74)
+            IM_COL32(47,  128, 237, 255),   // accent       (#2F80ED — Sky blue)
+            IM_COL32(47,  128, 237, 255),   // accent2      (flat themes: accent2 == accent)
+            IM_COL32(47,  128, 237, 46),    // accentSoft
             IM_COL32(255, 255, 255, 255),   // onAccent
-            IM_COL32(76,  207, 132, 255),   // good
-            IM_COL32(240, 178, 74,  255),   // warning
-            IM_COL32(243, 101, 109, 255),   // danger
+            IM_COL32(52,  211, 153, 255),   // good         (#34D399)
+            IM_COL32(251, 191, 36,  255),   // warning      (#FBBF24)
+            IM_COL32(248, 113, 113, 255),   // danger        (#F87171)
         };
 
-        ImVec4 g_accent(103.0f / 255.0f, 100.0f / 255.0f, 255.0f / 255.0f, 1.0f);
+        ImVec4 g_accent(47.0f / 255.0f, 128.0f / 255.0f, 237.0f / 255.0f, 1.0f);  // #2F80ED Sky
 
         Palette g_base = g_palette;
         float g_opacity = 1.0f;
@@ -44,6 +46,7 @@ namespace Gui
             dst.background  = Alpha(src.background,  o);
             dst.sidebar     = Alpha(src.sidebar,     o);
             dst.panel       = Alpha(src.panel,       o);
+            dst.panelSoft   = Alpha(src.panelSoft,   o);
             dst.card        = Alpha(src.card,        o);
             dst.cardHover   = Alpha(src.cardHover,   o);
             dst.widget      = Alpha(src.widget,      o);
@@ -54,6 +57,7 @@ namespace Gui
             dst.textDim     = Alpha(src.textDim,     o);
             dst.textMute    = Alpha(src.textMute,    o);
             dst.accent      = Alpha(src.accent,      o);
+            dst.accent2     = Alpha(src.accent2,     o);
             dst.accentSoft  = Alpha(src.accentSoft,  o);
             dst.onAccent    = Alpha(src.onAccent,    o);
             dst.good        = Alpha(src.good,        o);
@@ -62,14 +66,11 @@ namespace Gui
         }
 
         const AccentPreset g_presets[] = {
-            { "Indigo",  0.404f, 0.392f, 1.000f },
-            { "Violet",  0.667f, 0.416f, 1.000f },
-            { "Azure",   0.180f, 0.541f, 0.984f },
-            { "Cyan",    0.180f, 0.780f, 0.851f },
-            { "Emerald", 0.235f, 0.788f, 0.510f },
-            { "Amber",   0.976f, 0.686f, 0.243f },
-            { "Rose",    0.965f, 0.365f, 0.451f },
-            { "Crimson", 0.878f, 0.204f, 0.318f },
+            { "Watermelon", 1.000f, 0.302f, 0.427f },  // #FF4D6D
+            { "Mint",       0.169f, 0.769f, 0.639f },  // #2BC4A3
+            { "Sky",        0.184f, 0.502f, 0.929f },  // #2F80ED
+            { "Violet",     0.541f, 0.169f, 0.890f },  // #8A2BE2
+            { "Ember",      1.000f, 0.478f, 0.271f },  // #FF7A45
         };
 
         ImFont* Fallback(ImFont* font)
@@ -103,6 +104,7 @@ namespace Gui
         g_accent.w = 1.0f;
 
         g_base.accent = ImGui::ColorConvertFloat4ToU32(g_accent);
+        g_base.accent2 = g_base.accent;  // flat themes: accent2 == accent
         g_base.accentSoft = Alpha(g_base.accent, 0.18f);
 
         // Pick black or white text on top of the accent based on luminance so
@@ -149,53 +151,66 @@ namespace Gui
 
         ImGuiStyle& style = ImGui::GetStyle();
         style.WindowRounding = 14.0f;
-        style.ChildRounding = 12.0f;
+        style.ChildRounding = 10.0f;
         style.FrameRounding = 8.0f;
-        style.PopupRounding = 12.0f;
-        style.ScrollbarRounding = 10.0f;
-        style.GrabRounding = 8.0f;
+        style.PopupRounding = 10.0f;
+        style.ScrollbarRounding = 8.0f;
+        style.GrabRounding = 6.0f;
+        style.TabRounding = 8.0f;
         style.WindowBorderSize = 0.0f;
         style.ChildBorderSize = 0.0f;
-        style.PopupBorderSize = 0.0f;
+        style.PopupBorderSize = 1.0f;
         style.FrameBorderSize = 0.0f;
         style.WindowPadding = ImVec2(0.0f, 0.0f);
-        style.FramePadding = ImVec2(10.0f, 7.0f);
-        style.ItemSpacing = ImVec2(8.0f, 6.0f);
+        style.FramePadding = ImVec2(10.0f, 6.0f);
+        style.ItemSpacing = ImVec2(8.0f, 8.0f);
         style.ItemInnerSpacing = ImVec2(6.0f, 6.0f);
-        style.ScrollbarSize = 6.0f;
+        style.ScrollbarSize = 8.0f;
+        style.GrabMinSize = 12.0f;
         style.WindowMenuButtonPosition = ImGuiDir_None;
+        style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+        style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+        style.SelectableTextAlign = ImVec2(0.0f, 0.5f);
+        style.AntiAliasedLines = true;
+        style.AntiAliasedFill = true;
 
         auto toVec4 = [](ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); };
 
         ImVec4* colors = style.Colors;
         colors[ImGuiCol_Text] = toVec4(g_palette.text);
         colors[ImGuiCol_TextDisabled] = toVec4(g_palette.textMute);
-        colors[ImGuiCol_WindowBg] = toVec4(g_palette.background);
-        colors[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
+        colors[ImGuiCol_WindowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);  // background drawn manually
+        colors[ImGuiCol_ChildBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
         colors[ImGuiCol_PopupBg] = toVec4(g_palette.panel);
         colors[ImGuiCol_Border] = toVec4(g_palette.border);
-        colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_FrameBg] = toVec4(g_palette.widget);
-        colors[ImGuiCol_FrameBgHovered] = toVec4(g_palette.widgetHover);
-        colors[ImGuiCol_FrameBgActive] = toVec4(g_palette.widgetHover);
-        colors[ImGuiCol_TitleBg] = toVec4(g_palette.sidebar);
-        colors[ImGuiCol_TitleBgActive] = toVec4(g_palette.sidebar);
-        colors[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_ScrollbarGrab] = toVec4(Alpha(g_palette.textMute, 0.45f));
-        colors[ImGuiCol_ScrollbarGrabHovered] = toVec4(Alpha(g_palette.textDim, 0.65f));
+        colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[ImGuiCol_FrameBg] = toVec4(g_palette.panel);
+        colors[ImGuiCol_FrameBgHovered] = toVec4(g_palette.panelSoft);
+        colors[ImGuiCol_FrameBgActive] = toVec4(g_palette.panelSoft);
+        colors[ImGuiCol_TitleBg] = toVec4(g_palette.panel);
+        colors[ImGuiCol_TitleBgActive] = toVec4(g_palette.panel);
+        colors[ImGuiCol_MenuBarBg] = toVec4(g_palette.panel);
+        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[ImGuiCol_ScrollbarGrab] = toVec4(Alpha(g_palette.textMute, 0.55f));
+        colors[ImGuiCol_ScrollbarGrabHovered] = toVec4(Alpha(g_palette.textDim, 0.75f));
         colors[ImGuiCol_ScrollbarGrabActive] = toVec4(g_palette.accent);
         colors[ImGuiCol_CheckMark] = toVec4(g_palette.accent);
         colors[ImGuiCol_SliderGrab] = toVec4(g_palette.accent);
         colors[ImGuiCol_SliderGrabActive] = toVec4(g_palette.accent);
-        colors[ImGuiCol_Button] = toVec4(g_palette.widget);
-        colors[ImGuiCol_ButtonHovered] = toVec4(g_palette.widgetHover);
-        colors[ImGuiCol_ButtonActive] = toVec4(g_palette.accent);
-        colors[ImGuiCol_Header] = toVec4(g_palette.widget);
-        colors[ImGuiCol_HeaderHovered] = toVec4(g_palette.widgetHover);
-        colors[ImGuiCol_HeaderActive] = toVec4(g_palette.accent);
-        colors[ImGuiCol_Separator] = toVec4(g_palette.line);
-        colors[ImGuiCol_ResizeGrip] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_NavHighlight] = ImVec4(0, 0, 0, 0);
+        colors[ImGuiCol_Button] = toVec4(g_palette.panelSoft);
+        colors[ImGuiCol_ButtonHovered] = toVec4(brighten(g_palette.panelSoft, 0.05f));
+        colors[ImGuiCol_ButtonActive] = toVec4(brighten(g_palette.panelSoft, -0.04f));
+        colors[ImGuiCol_Header] = toVec4(Alpha(g_palette.accent, 0.35f));
+        colors[ImGuiCol_HeaderHovered] = toVec4(Alpha(g_palette.accent, 0.25f));
+        colors[ImGuiCol_HeaderActive] = toVec4(Alpha(g_palette.accent, 0.45f));
+        colors[ImGuiCol_Separator] = toVec4(Alpha(g_palette.line, 0.8f));
+        colors[ImGuiCol_SeparatorHovered] = toVec4(g_palette.accent);
+        colors[ImGuiCol_SeparatorActive] = toVec4(g_palette.accent2);
+        colors[ImGuiCol_ResizeGrip] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[ImGuiCol_Tab] = toVec4(g_palette.panel);
+        colors[ImGuiCol_TabHovered] = toVec4(Alpha(g_palette.accent, 0.35f));
+        colors[ImGuiCol_TabSelected] = toVec4(Alpha(g_palette.accent, 0.55f));
+        colors[ImGuiCol_NavHighlight] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     // ---------------------------------------------------------------- fonts

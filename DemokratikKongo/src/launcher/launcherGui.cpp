@@ -1,4 +1,7 @@
 #include "launcherGui.h"
+#include "coreUpdater.h"
+#include "installPath.h"
+#include "licenseClient.h"
 #include "resourceLoader.h"
 #include "util.h"
 
@@ -187,19 +190,36 @@ void LauncherGui::init(HWND hwnd, const LauncherFonts& fonts, float dpiScale)
         log.info("Embedded core: " + std::to_string(embeddedPayloadBytes_) + " bytes inside EXE");
     }
 
-    payloadPath_ = ensureEmbeddedPayload();
-    if (payloadPath_.empty()) {
-        setStatus("Core missing", StatusKind::Warning);
-    } else {
-        log.debug("Payload: " + wideToUtf8(payloadPath_));
+    // The payload is extracted lazily, on the first Inject. Dropping a DLL to
+    // TEMP at start-up was an unnecessary behavioural footprint (Defender's
+    // ML models flag dropped-then-injected binaries); nothing touches disk
+    // before the user actually injects.
+    if (embeddedPayloadBytes_ > 0 || !siblingPayloadPath().empty()) {
         setStatus("Ready", StatusKind::Ready);
+    } else {
+        setStatus("Core missing", StatusKind::Warning);
     }
+
+    // A stored license is re-checked silently on every start; the license
+    // card shows the progress and the status row carries the outcome.
+    if (const auto record = loadLicenseRecord(); record && !record->key.empty()) {
+        licenseKey_ = record->key;
+        beginLicenseCheck(record->key, /*interactive=*/false);
+    }
+
+    // Launcher self-update: the site hosts the current EXE (panel > DLL /
+    // Guncelleme > Launcher); a new version swaps in and triggers a relaunch.
+    beginLauncherSelfCheck();
 }
 
 void LauncherGui::shutdown()
 {
     if (injectThread_.joinable())
         injectThread_.join();
+    if (licenseThread_.joinable())
+        licenseThread_.join();
+    if (updateThread_.joinable())
+        updateThread_.join();
 }
 
 void LauncherGui::onDpiChanged(const LauncherFonts& fonts, float dpiScale)
@@ -402,6 +422,24 @@ void LauncherGui::injectSelected()
     if (injectThread_.joinable())
         injectThread_.join();
 
+    // Injection is gated on a licence that passed within the freshness
+    // window; an older pass is re-verified inside the worker (below) so a
+    // suspension lands without restarting the launcher.
+    LicenseInfo license;
+    {
+        std::lock_guard lock(licenseMutex_);
+        license = licenseInfo_;
+    }
+    const std::string recheckKey = licenseKey_;
+    if (!license.valid || recheckKey.empty()) {
+        setStatus("License required", StatusKind::Warning);
+        pushToast("Verify your license first", pal::kWarning);
+        return;
+    }
+    const int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const bool stale = (nowSec - license.checkedAtUnix) > 30 * 60;
+
     if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(processes_.size())) {
         setStatus("No target", StatusKind::Warning);
         pushToast("No Minecraft process found", pal::kWarning);
@@ -431,8 +469,8 @@ void LauncherGui::injectSelected()
     {
         std::lock_guard lock(injectMutex_);
         progressStep_ = 0;
-        progressTotal_ = 9;
-        progressLabel_ = "Preparing...";
+        progressTotal_ = 11 + (stale ? 1 : 0);
+        progressLabel_ = stale ? "Verifying license..." : "Downloading core update...";
     }
     injecting_ = true;
     setStatus("Injecting...", StatusKind::Busy);
@@ -442,11 +480,50 @@ void LauncherGui::injectSelected()
                           scanner_.launcherName(target.launcher) + ", " +
                           (target.x64 ? "x64" : "x86") + ")");
 
-    injectThread_ = std::thread([this, pid, payload]() {
-        InjectionResult result = injector_.inject(pid, payload, [this](int step, int total, const char* label) {
+    injectThread_ = std::thread([this, pid, payload, recheckKey, stale]() {
+        int offset = 0;
+        if (stale) {
+            LicenseInfo fresh = license_.check(recheckKey);
+            {
+                std::lock_guard lock(licenseMutex_);
+                licenseInfo_ = fresh;
+            }
+            if (!fresh.valid) {
+                setStatus(fresh.userMessage, StatusKind::Error);
+                pushToast(fresh.userMessage, pal::kDanger);
+                injecting_ = false;
+                return;
+            }
+            offset = 1;
+        }
+
+        // Every inject prefers the server-hosted core (see the standards
+        // document): a new DLL ships by uploading it in the panel, and the EXE
+        // never changes. Download failures fall back to the embedded payload
+        // so an update outage cannot lock licensed users out.
+        std::wstring injectPath = payload;
+        {
             std::lock_guard lock(injectMutex_);
-            progressStep_ = step;
-            progressTotal_ = total;
+            progressStep_ = offset;
+            progressTotal_ = 10 + offset + 1;
+            progressLabel_ = "Downloading core update...";
+        }
+        const CoreUpdateResult update = fetchLatestCore(recheckKey);
+        if (update.ok) {
+            injectPath = update.filePathW;
+            LauncherLog::I().info("Core update: " + update.name + " (" +
+                                  update.sha256Hex.substr(0, 12) + ", " +
+                                  std::to_string(update.size) + " bytes)");
+        } else {
+            LauncherLog::I().warn("Core update unavailable (" + update.error + ") - using embedded core");
+        }
+        ++offset;
+
+        InjectionResult result = injector_.inject(pid, injectPath, [this, offset](int step, int total, const char* label) {
+            std::lock_guard lock(injectMutex_);
+            // Slots below `offset` are the licence re-check and core update.
+            progressStep_ = step + offset;
+            progressTotal_ = total + offset;
             progressLabel_ = label ? label : "";
         });
 
@@ -458,6 +535,104 @@ void LauncherGui::injectSelected()
             pushToast(std::string("Injection failed: ") + injectStepName(result.failedStep), pal::kDanger);
         }
         injecting_ = false;
+    });
+}
+
+// ============================================================ license
+
+LicenseInfo LauncherGui::licenseSnapshot()
+{
+    std::lock_guard lock(licenseMutex_);
+    return licenseInfo_;
+}
+
+bool LauncherGui::licenseValidNow()
+{
+    std::lock_guard lock(licenseMutex_);
+    return licenseInfo_.valid;
+}
+
+void LauncherGui::beginLicenseCheck(const std::string& key, bool interactive)
+{
+    if (licenseBusy_)
+        return;
+    if (licenseThread_.joinable())
+        licenseThread_.join();
+
+    licenseBusy_ = true;
+    if (interactive)
+        setStatus("Checking license...", StatusKind::Busy);
+
+    licenseThread_ = std::thread([this, key]() {
+        LicenseInfo info = license_.check(key);
+        {
+            std::lock_guard lock(licenseMutex_);
+            licenseInfo_ = info;
+        }
+
+        // Never log the key itself - only the outcome.
+        LauncherLog::I().info("License check: " + (info.code.empty() ? std::string("?") : info.code) +
+                              (info.valid ? " (valid)" : " (invalid)"));
+
+        if (info.valid) {
+            if (info.offline) {
+                setStatus(info.userMessage, StatusKind::Warning);
+                pushToast(info.userMessage, pal::kWarning);
+            } else {
+                std::string msg = "License active";
+                if (info.daysLeft >= 0)
+                    msg += " - " + std::to_string(info.daysLeft) + " day(s) left";
+                setStatus(msg, StatusKind::Success);
+                pushToast("License verified", pal::kGood);
+            }
+        } else {
+            setStatus(info.userMessage, StatusKind::Error);
+            pushToast(info.userMessage, pal::kDanger);
+        }
+        licenseBusy_ = false;
+    });
+}
+
+void LauncherGui::clearLicense()
+{
+    if (licenseThread_.joinable())
+        licenseThread_.join();
+    clearLicenseRecord();
+    {
+        std::lock_guard lock(licenseMutex_);
+        licenseInfo_ = LicenseInfo{};
+    }
+    licenseKey_.clear();
+    keyInput_[0] = '\0';
+    setStatus("Enter license key", StatusKind::Warning);
+}
+
+void LauncherGui::beginLauncherSelfCheck()
+{
+    if (updateThread_.joinable())
+        updateThread_.join();
+
+    updateThread_ = std::thread([this]() {
+        const LauncherUpdateResult update = checkAndApplyLauncherUpdate();
+        LauncherLog::I().info("Launcher update check: " + update.message);
+        if (!update.updated || !update.needsRestart)
+            return;
+
+        setStatus("Launcher updated - restarting...", StatusKind::Success);
+        pushToast("Launcher updated - restarting", pal::kGood);
+        Sleep(400); // one frame's worth, so the toast is visible before we exit
+
+        const std::wstring exe = ownExecutablePath();
+        if (exe.empty())
+            return;
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(exe.c_str(), nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+        }
     });
 }
 
@@ -957,6 +1132,80 @@ void LauncherGui::drawProcessPopup(ImVec2 anchor, float width)
     ImGui::PopStyleVar(2);
 }
 
+float LauncherGui::drawLicenseCard(float y)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float x = origin_.x + s(kPadBase);
+    const float w = width_ - s(kPadBase) * 2.0f;
+
+    text(dl, fonts_.caption, ImVec2(x, y), pal::kTextMute, "LICENSE");
+    y += s(18.0f);
+
+    const LicenseInfo info = licenseSnapshot();
+    const bool busy = licenseBusy_;
+    const float h = s(46.0f);
+    const ImVec2 p(x, y);
+    const ImVec2 q(x + w, y + h);
+    const float r = s(10.0f);
+
+    dl->AddRectFilled(p, q, pal::kPanel, r);
+    dl->AddRect(p, q, info.valid ? pal::Alpha(pal::kGood, 0.55f) : pal::kBorder, r, 0, 1.0f);
+
+    const float cy = (p.y + q.y) * 0.5f;
+
+    if (busy) {
+        // Same pulse idiom as the status pill so "working" reads the same.
+        const float pulse = 0.45f + 0.55f * (0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 5.0f));
+        dl->AddCircleFilled(ImVec2(x + s(18.0f), cy), s(4.0f), pal::Alpha(pal::kAccentGlow, pulse));
+        textIn(dl, fonts_.regular, ImVec2(x + s(30.0f), p.y), ImVec2(q.x - s(12.0f), q.y),
+               pal::kTextDim, "Checking license...", ImVec2(0.0f, 0.5f));
+    } else if (info.valid) {
+        dl->AddCircleFilled(ImVec2(x + s(18.0f), cy), s(4.0f), pal::kGood);
+        std::string line = info.holder.empty() ? "Active" : info.holder;
+        line += "  -  ";
+        line += (info.daysLeft < 0) ? "lifetime" : (std::to_string(info.daysLeft) + " day(s) left");
+        if (info.offline)
+            line += "  (offline)";
+
+        const float changeW = textSize(fonts_.caption, "Change").x + s(16.0f);
+        textEllipsis(dl, fonts_.regular, ImVec2(x + s(30.0f), std::floor(cy - s(9.0f))),
+                     w - s(30.0f) - changeW - s(16.0f), pal::kText, line.c_str());
+        if (textButton("##licchange", "Change", ImVec2(q.x - changeW - s(8.0f), cy - s(11.0f))))
+            clearLicense();
+    } else {
+        const char* btnLabel = "Activate";
+        const float btnW = textSize(fonts_.caption, btnLabel).x + s(16.0f);
+        const float inputW = w - btnW - s(28.0f);
+        const float inputH = h - s(12.0f);
+
+        ImGui::PushFont(fonts_.mono);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(s(10.0f), s(6.0f)));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, pal::ToVec4(pal::kWidget));
+        ImGui::SetCursorScreenPos(ImVec2(x + s(8.0f), cy - inputH * 0.5f));
+        ImGui::SetNextItemWidth(inputW);
+        const bool submitted = ImGui::InputText("##licensekey", keyInput_, IM_ARRAYSIZE(keyInput_),
+                                                ImGuiInputTextFlags_EnterReturnsTrue);
+        // ImGui has no placeholder support; paint one while the box is empty.
+        if (keyInput_[0] == '\0' && !ImGui::IsItemActive())
+            text(dl, fonts_.mono, ImVec2(x + s(18.0f), std::floor(cy - s(8.0f))),
+                 pal::kTextMute, "DKK-XXXXX-XXXXX-XXXXX-XXXXX");
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        ImGui::PopFont();
+
+        const bool clicked = textButton("##licactivate", btnLabel,
+                                        ImVec2(q.x - btnW - s(12.0f), cy - s(11.0f)), true);
+        if ((submitted || clicked) && keyInput_[0] != '\0') {
+            const std::string key = normalizeLicenseKey(keyInput_);
+            strncpy_s(keyInput_, key.c_str(), _TRUNCATE);
+            licenseKey_ = key;
+            beginLicenseCheck(key, /*interactive=*/true);
+        }
+    }
+
+    return y + h;
+}
+
 float LauncherGui::drawInjectButton(float y)
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -965,7 +1214,13 @@ float LauncherGui::drawInjectButton(float y)
     const float h = s(44.0f);
 
     const bool hasTarget = selectedIndex_ >= 0 && selectedIndex_ < static_cast<int>(processes_.size());
-    const bool enabled = !injecting_ && hasTarget && !payloadPath_.empty();
+    const bool licensed = licenseValidNow();
+    // The payload is extracted lazily (on click), so readiness means "a core
+    // can be resolved": the embedded copy, a sibling DLL, or an already
+    // extracted path. The real extraction happens inside injectSelected.
+    const bool payloadReady = embeddedPayloadBytes_ > 0 || !siblingPayloadPath().empty() ||
+                              !payloadPath_.empty();
+    const bool enabled = !injecting_ && hasTarget && payloadReady && licensed;
 
     ImGui::SetCursorScreenPos(ImVec2(x, y));
     if (!enabled)
@@ -1011,7 +1266,9 @@ float LauncherGui::drawInjectButton(float y)
         dl->PopClipRect();
     }
 
-    const char* label = injecting_ ? "Injecting..." : (hasTarget ? "Inject" : "No target");
+    const char* label = injecting_ ? "Injecting..."
+                       : (!hasTarget ? "No target"
+                       : (!licensed ? "License required" : "Inject"));
     const ImU32 textCol = lerpCol(pal::kTextMute, pal::kOnAccent, on);
     const ImVec2 ls = textSize(fonts_.bold, label);
     const float iconW = s(14.0f);
@@ -1283,6 +1540,7 @@ void LauncherGui::render()
     y = drawStatusRow(y) + s(14.0f);
     y = drawHero(y) + s(16.0f);
     y = drawProcessCard(y) + s(14.0f);
+    y = drawLicenseCard(y) + s(14.0f);
     y = drawInjectButton(y) + s(8.0f);
     drawProgress(y);
 

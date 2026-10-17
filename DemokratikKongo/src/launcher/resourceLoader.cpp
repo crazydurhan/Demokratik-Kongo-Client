@@ -1,5 +1,6 @@
 #include "resourceLoader.h"
 
+#include "agentJarData.h"
 #include "installPath.h"
 #include "logger.h"
 #include "payloadDiagnostics.h"
@@ -213,6 +214,57 @@ DWORD embeddedPayloadSize()
     if (!loadEmbedded(embedded))
         return 0;
     return embedded.size;
+}
+
+std::vector<uint8_t> embeddedAgentJarBytes()
+{
+    return decodeBase64(agentjar::kAgentJarBase64());
+}
+
+std::wstring ensureEmbeddedAgentJar()
+{
+    auto& log = LauncherLog::I();
+
+    const std::vector<uint8_t> jar = embeddedAgentJarBytes();
+    if (jar.empty()) {
+        log.error("Embedded agent JAR missing or corrupt — rebuild the launcher (resources/build-agent.ps1).");
+        return L"";
+    }
+
+    EmbeddedPayload embedded{};
+    if (!loadEmbedded(embedded)) {
+        log.error("Cannot resolve payload hash for the agent JAR cache path.");
+        return L"";
+    }
+
+    const std::wstring dir = payloadDirectory(embedded.hash);
+    const std::wstring jarPath = agentJarPath(embedded.hash);
+    if (dir.empty() || jarPath.empty()) {
+        log.error("Could not resolve temp extract path for the agent JAR.");
+        return L"";
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        log.error("Could not create agent cache directory: " + ec.message());
+        return L"";
+    }
+
+    const uint64_t jarHash = fnv1a64(jar.data(), jar.size());
+    const bool exists = GetFileAttributesW(jarPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+    const uint64_t diskSize = exists ? fileSizeBytes(jarPath) : 0;
+    const bool upToDate = exists && diskSize == jar.size() && fnv1a64File(jarPath) == jarHash;
+
+    if (!upToDate) {
+        if (!writePayloadFile(jarPath, jar.data(), static_cast<DWORD>(jar.size()))) {
+            log.error("Failed to write agent JAR: " + lastErrorString());
+            return L"";
+        }
+        log.debug("Agent JAR extracted (" + std::to_string(jar.size()) + " bytes)");
+    }
+
+    return jarPath;
 }
 
 } // namespace dk

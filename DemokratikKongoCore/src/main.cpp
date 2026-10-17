@@ -1,4 +1,5 @@
 #include "main.h"
+#include "attachEntry.h"
 #include "base/util/crash_diagnostics.h"
 
 
@@ -31,9 +32,9 @@ BOOL WINAPI DllMain(HINSTANCE hModule, DWORD dwReason, LPVOID lpReserved)
 		Main::HModule = hModule;
 		DisableThreadLibraryCalls(hModule);
 
-		HANDLE hThread = CreateThread(nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(Main::Init), hModule, 0, nullptr);
-
-		if (hThread) CloseHandle(hThread);
+		// Both load paths (CRT LoadLibrary and JVMTI attach) converge here;
+		// the guard inside StartFromDllMain keeps a single bootstrap.
+		AttachEntry::StartFromDllMain(hModule);
 	}
 
 	return TRUE;

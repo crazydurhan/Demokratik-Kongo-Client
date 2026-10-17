@@ -41,4 +41,16 @@ private:
     std::wstring readCommandLine(HANDLE hProc);
 };
 
+// Find the java.exe that started the given target. Preferred source is the
+// target process command line (same JVM guarantees attach-protocol
+// compatibility). Falls back to JAVA_HOME / registry / PATH.
+std::wstring findJavaExeForTarget(DWORD pid);
+
+// Attach-helper java candidates, best first: full JDKs (the attach module is
+// present) before JRE images, with the target's own java as the last resort.
+// JRE images - e.g. the Zulu JREs Lunar bundles - lack
+// com.sun.tools.attach.VirtualMachine, and attaching through one used to fail
+// straight into the classic remote-thread fallback. See injector.cpp.
+std::vector<std::wstring> collectAttachJavaExeCandidates(DWORD pid);
+
 } // namespace dk

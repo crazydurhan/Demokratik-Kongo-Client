@@ -8,6 +8,10 @@
 **/build/*.exp
 /release/
 
+# Agent JAR build intermediates (the embedded base64 lives in
+# DemokratikKongo/src/launcher/agentJarData.h and IS committed)
+/DemokratikKongo/resources/generated/
+
 # Local machine / IDE state
 local.props
 .vs/

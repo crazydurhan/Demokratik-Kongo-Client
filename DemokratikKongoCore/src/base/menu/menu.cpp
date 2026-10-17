@@ -2,6 +2,7 @@
 
 #include "../base.h"
 #include "../gui/gui.h"
+#include "../gui/arifHost.h"
 
 #include "../../../ext/imgui/imgui.h"
 #include "../../../ext/imgui/imgui_internal.h"
@@ -82,6 +83,9 @@ bool Menu::ProcessPendingGLTeardown()
     if (Menu::MenuGLContext && Menu::HandleDeviceContext)
     {
         wglMakeCurrent(Menu::HandleDeviceContext, Menu::MenuGLContext);
+        // DK-PORT: release the arif GUI icon textures while their GL context
+        // is still current, then drop its model.
+        ArifGUI::Shutdown();
         wglDeleteContext(Menu::MenuGLContext);
         Menu::MenuGLContext = nullptr;
         wglMakeCurrent(Menu::HandleDeviceContext, Menu::OriginalGLContext);

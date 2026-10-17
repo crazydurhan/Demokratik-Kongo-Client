@@ -1,6 +1,7 @@
 #pragma once
 
 #include "injector.h"
+#include "licenseClient.h"
 #include "logger.h"
 #include "process_scanner.h"
 
@@ -53,7 +54,9 @@ public:
     // from these times the DPI scale; the log panel grows it by
     // kLogPanelHeight while open.
     static constexpr float kBaseWidth = 560.0f;
-    static constexpr float kBaseHeight = 420.0f;
+    // 504 = the original 420 plus the license card (18px label + 46px card
+    // + 14px gap); the log panel keeps its own constant below.
+    static constexpr float kBaseHeight = 504.0f;
     static constexpr float kLogPanelHeight = 240.0f;
 
     void init(HWND hwnd, const LauncherFonts& fonts, float dpiScale);
@@ -82,6 +85,11 @@ private:
     void refreshProcesses();
     void injectSelected();
     int pickBestProcess() const;
+    void beginLicenseCheck(const std::string& key, bool interactive);
+    void beginLauncherSelfCheck();
+    void clearLicense();
+    bool licenseValidNow();
+    LicenseInfo licenseSnapshot();
     void pushToast(const std::string& text, ImU32 color);
     void copyLogToClipboard();
     void applyStyle();
@@ -94,6 +102,7 @@ private:
     float drawProcessCard(float y);
     void drawProcessPopup(ImVec2 anchor, float width);
     float drawInjectButton(float y);
+    float drawLicenseCard(float y);
     float drawProgress(float y);
     void drawLogPanel(float top, float bottom);
     void drawBottomBar(float top);
@@ -136,6 +145,17 @@ private:
     ImVec2 origin_;
     float width_ = 0.0f;
     float height_ = 0.0f;
+
+    // Licensing: state is written by licenseThread_ and read by the UI under
+    // licenseMutex_; see licenseClient.h and the standards document.
+    LicenseClient license_;
+    std::thread licenseThread_;
+    std::atomic<bool> licenseBusy_{ false };
+    std::mutex licenseMutex_;
+    LicenseInfo licenseInfo_;
+    std::string licenseKey_; // the key the current licenseInfo_ belongs to
+    char keyInput_[96] = {}; // license entry field buffer
+    std::thread updateThread_; // launcher self-update check (once per start)
 
     std::thread injectThread_;
     std::atomic<bool> injecting_{ false };

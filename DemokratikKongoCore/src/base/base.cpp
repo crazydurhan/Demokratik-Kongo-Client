@@ -3,6 +3,7 @@
 #include "../main.h"
 #include "java/java.h"
 #include "launcher/launcherDetection.h"
+#include "license/licenseGate.h"
 #include "util/logger.h"
 #include "util/crash_diagnostics.h"
 #include "util/cheatLoop.h"
@@ -117,6 +118,11 @@ void Base::Init()
 	Patcher_Initialized = false;
 	Menu_Initialized = false;
 	ModuleManager_Initialized = false;
+
+	// Stage 0: licensing. Fails closed - every module dispatch point checks
+	// LicenseGate::Active(), which only becomes true after an independent
+	// server validation with this machine's HWID (standards doc, §7).
+	LicenseGate::Init();
 
 	// ── Stage 1: MinHook ──────────────────────────────────────────
 	DIAG_STAGE_BEGIN("MH_Initialize");
@@ -278,6 +284,7 @@ void Base::Kill()
 	Base::ShuttingDown.store(true, std::memory_order_release);
 	Base::SetRunning(false);
 	Base::WaitForRenderQuiescent();
+	LicenseGate::Kill();
 
 	// Auto-save the default profile while every module is still registered
 	// (must run before ModuleManager::Kill clears the registry).

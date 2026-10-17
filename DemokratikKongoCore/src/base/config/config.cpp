@@ -4,6 +4,7 @@
 #include "../moduleManager/modules/combat/friends.h"
 #include "../menu/menu.h"
 #include "../gui/guiCore.h"
+#include "../gui/arifHost.h"
 
 #include "stealthNames.h"
 
@@ -144,6 +145,9 @@ bool ProfileManager::save(const std::string& name)
     o << "  \"profile\": \"" << escape(name) << "\",\n";
     o << "  \"menuKey\": " << Menu::Keybind << ",\n";
 
+    // DK-PORT: the arif ClickGUI theme preset survives restarts.
+    o << "  \"arifTheme\": " << ArifGUI::ThemeIndex() << ",\n";
+
     // GUI preferences (accent colour + interface toggles).
     {
         const Gui::Preferences& p = Gui::Prefs();
@@ -225,6 +229,15 @@ bool ProfileManager::load(const std::string& name)
         if (p != std::string::npos) {
             size_t c = doc.find(':', p);
             if (c != std::string::npos) Menu::Keybind = std::atoi(doc.c_str() + c + 1);
+        }
+    }
+
+    // DK-PORT: arif ClickGUI theme preset (applied by the render thread).
+    {
+        size_t p = doc.find("\"arifTheme\"");
+        if (p != std::string::npos) {
+            size_t c = doc.find(':', p);
+            if (c != std::string::npos) ArifGUI::SetThemeIndex(std::atoi(doc.c_str() + c + 1));
         }
     }
 

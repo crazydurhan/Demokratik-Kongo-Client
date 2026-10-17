@@ -2,6 +2,8 @@
 
 #include "logger.h"
 #include "payloadDiagnostics.h"
+#include "process_scanner.h"
+#include "resourceLoader.h"
 #include "util.h"
 
 #include <psapi.h>
@@ -19,8 +21,11 @@ namespace dk {
 
 const char* injectStepName(InjectStep step)
 {
-    switch (step) {
+    switch (step)
+    {
     case InjectStep::ValidatePayload:       return "ValidatePayload";
+    case InjectStep::PrepareAttach:         return "PrepareAttach";
+    case InjectStep::AttachJvm:             return "AttachJvm";
     case InjectStep::OpenProcess:           return "OpenProcess";
     case InjectStep::ArchCheck:             return "ArchCheck";
     case InjectStep::VirtualAllocEx:        return "VirtualAllocEx";
@@ -36,6 +41,8 @@ const char* injectStepName(InjectStep step)
 namespace {
 
 constexpr DWORD kInjectWaitMs = 30000;
+constexpr DWORD kAttachWaitMs = 30000;   // helper java + attach + JVM agent load
+constexpr int   kAttachJarAttempts = 2;  // allow one retry (JVM still booting)
 
 constexpr ULONG kThreadHideFromDebugger = 0x00000004;
 
@@ -51,6 +58,8 @@ using NtCreateThreadExFn = NTSTATUS(NTAPI*)(
     SIZE_T StackSize,
     SIZE_T MaximumStackSize,
     PVOID AttributeList);
+
+// ────────────────────────────────────────────────────────────────── logging
 
 void logPayloadDiagnostics(const PayloadDiagnostics& d)
 {
@@ -78,30 +87,6 @@ void logPayloadDiagnostics(const PayloadDiagnostics& d)
         log.warn("PE validation failed: " + d.peErrorText);
 }
 
-bool sameArchAsTarget(HANDLE hProc, std::string& err, std::string& detail)
-{
-    BOOL targetWow = FALSE;
-    BOOL selfWow = FALSE;
-    if (!IsWow64Process(hProc, &targetWow)) {
-        err = "IsWow64Process(target) failed";
-        detail = lastErrorString();
-        return false;
-    }
-    IsWow64Process(GetCurrentProcess(), &selfWow);
-
-    const bool target64 = !targetWow;
-    const bool self64 = !selfWow;
-    detail = std::string("injector=") + (self64 ? "x64" : "x86") +
-             ", target=" + (target64 ? "x64" : "x86");
-
-    if (target64 != self64) {
-        err = target64 ? "Architecture mismatch — target is x64, injector is x86."
-                       : "Architecture mismatch — target is x86, injector is x64.";
-        return false;
-    }
-    return true;
-}
-
 void fail(InjectionResult& r, InjectStep step, const std::string& msg, DWORD err = 0)
 {
     r.ok = false;
@@ -122,6 +107,8 @@ void pass(InjectionResult& r, InjectStep step, const std::string& detail = {})
     LauncherLog::I().debug("[" + std::string(injectStepName(step)) + "]" +
                            (detail.empty() ? " OK" : " " + detail));
 }
+
+// ─────────────────────────────────────────────── shared process helpers
 
 bool isModuleLoadedInProcess(DWORD pid, const std::wstring& dllPath)
 {
@@ -150,11 +137,163 @@ bool isModuleLoadedInProcess(DWORD pid, const std::wstring& dllPath)
     return found;
 }
 
+bool sameArchAsTarget(HANDLE hProc, std::string& err, std::string& detail)
+{
+    BOOL targetWow = FALSE;
+    BOOL selfWow = FALSE;
+    if (!IsWow64Process(hProc, &targetWow)) {
+        err = "IsWow64Process(target) failed";
+        detail = lastErrorString();
+        return false;
+    }
+    IsWow64Process(GetCurrentProcess(), &selfWow);
+
+    const bool target64 = !targetWow;
+    const bool self64 = !selfWow;
+    detail = std::string("injector=") + (self64 ? "x64" : "x86") +
+             ", target=" + (target64 ? "x64" : "x86");
+
+    if (target64 != self64) {
+        err = target64 ? "Architecture mismatch — target is x64, injector is x86."
+                       : "Architecture mismatch — target is x86, injector is x64.";
+        return false;
+    }
+    return true;
+}
+
+// ────────────────────────────────────────────────────────── attach route
+
+// Spawn `java -jar <agentJar> <pid> <dllPath>` and wait for it to finish.
+// The helper attaches to the target JVM, enqueues the agent JAR, prints
+// "OK" or "ERR <reason>" and exits; stdout is captured for diagnostics.
+bool runAttachHelper(const std::wstring& javaExe,
+                     const std::wstring& agentJar,
+                     DWORD pid,
+                     const std::wstring& dllPath,
+                     DWORD timeoutMs,
+                     std::string& output,
+                     DWORD& exitCode)
+{
+    output.clear();
+    exitCode = 0;
+
+    // Quoted arguments. java/lang/Process-free: we spawn via CreateProcessW
+    // and the helper only ever receives paths we generated ourselves.
+    std::wstring cmd = L"\"" + javaExe + L"\" -jar \"" + agentJar + L"\" " +
+                       std::to_wstring(pid) + L" \"" + dllPath + L"\"";
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+        return false;
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = writePipe;
+    si.hStdError = writePipe;
+
+    PROCESS_INFORMATION pi{};
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
+
+    const BOOL launched = CreateProcessW(
+        nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+    CloseHandle(writePipe);
+
+    if (!launched) {
+        CloseHandle(readPipe);
+        return false;
+    }
+
+    const DWORD wait = WaitForSingleObject(pi.hProcess, timeoutMs);
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    if (wait == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 0);
+        exitCode = static_cast<DWORD>(-1);
+    }
+
+    // The helper emits a handful of bytes; reading after exit is safe.
+    DWORD available = 0;
+    std::string text;
+    while (PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr) && available > 0) {
+        char buf[512];
+        DWORD got = 0;
+        const DWORD want = available < sizeof(buf) ? available : static_cast<DWORD>(sizeof(buf));
+        if (!ReadFile(readPipe, buf, want, &got, nullptr) || got == 0)
+            break;
+        text.append(buf, got);
+    }
+
+    CloseHandle(readPipe);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    output = text;
+    return wait != WAIT_TIMEOUT;
+}
+
+// Attempt the JVM attach route with one java candidate. On failure the caller
+// moves on to the next candidate, then to the CRT fallback.
+bool injectViaAttachRoute(DWORD pid, const std::wstring& dllPath,
+                          const std::wstring& javaExe, int attempts,
+                          InjectionResult& r, std::string& lastAttachError)
+{
+    auto& log = LauncherLog::I();
+
+    const std::wstring agentJar = ensureEmbeddedAgentJar();
+    if (agentJar.empty()) {
+        lastAttachError = "embedded agent JAR unavailable";
+        return false;
+    }
+
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        std::string output;
+        DWORD exitCode = 0;
+
+        if (!runAttachHelper(javaExe, agentJar, pid, dllPath, kAttachWaitMs, output, exitCode)) {
+            lastAttachError = "attach helper timed out";
+            log.warn("Attach helper timed out (attempt " + std::to_string(attempt) + ").");
+            continue;
+        }
+
+        if (exitCode == 0 && output.find("OK") != std::string::npos) {
+            pass(r, InjectStep::AttachJvm, "agent JAR enqueued via JDK attach");
+            return true;
+        }
+
+        lastAttachError = output.empty() ? ("helper exit code " + std::to_string(exitCode))
+                                         : output;
+        // Strip trailing newlines for the log line.
+        while (!lastAttachError.empty() &&
+               (lastAttachError.back() == '\n' || lastAttachError.back() == '\r'))
+            lastAttachError.pop_back();
+
+        log.warn("Attach attempt " + std::to_string(attempt) + " failed: " + lastAttachError);
+    }
+
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────── CRT route
+
 bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllPath,
                                void* remotePath, LPTHREAD_START_ROUTINE loadLib,
                                InjectionResult& r, DWORD& moduleHandle,
                                bool& keepRemoteMem)
 {
+    (void)pid;
+    (void)dllPath;
+
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     auto ntCreateThreadEx = reinterpret_cast<NtCreateThreadExFn>(
         GetProcAddress(ntdll, "NtCreateThreadEx"));
@@ -226,14 +365,18 @@ bool injectViaNtCreateThreadEx(HANDLE hProc, DWORD pid, const std::wstring& dllP
 
 } // namespace
 
+// ───────────────────────────────────────────────────────────── pipeline
+
 InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectProgressFn progress)
 {
     InjectionResult r;
     auto& log = LauncherLog::I();
 
+    // Progress budget: attach (1 step) + CRT pipeline (9 steps).
+    constexpr int kTotalSteps = 10;
     auto report = [&](int step, const char* label) {
         if (progress)
-            progress(step, 9, label);
+            progress(step, kTotalSteps, label);
     };
 
     log.separator();
@@ -241,7 +384,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectP
 
     // ── Step 1: Validate payload ─────────────────────────────────────
     {
-        report(1, "Validating payload");
+        report(0, "Validating payload");
         r.failedStep = InjectStep::ValidatePayload;
         PayloadDiagnostics diag = diagnosePayload(dllPath);
         logPayloadDiagnostics(diag);
@@ -268,7 +411,70 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectP
              std::to_string(diag.fileSize) + " bytes @ " + diag.pathUtf8);
     }
 
-    // ── Step 2: OpenProcess ──────────────────────────────────────────
+    std::string attachError;
+
+    // ── Attach route (preferred) ─────────────────────────────────────
+    // Uses the target JVM's own attach listener: no remote thread, no
+    // LoadLibraryW, no loader-lock contention. Falls back to CRT below.
+    {
+        report(1, "Trying JVM attach route");
+
+        const std::vector<std::wstring> javaCandidates = collectAttachJavaExeCandidates(pid);
+        bool targetIs64 = false;
+        {
+            // The attach route ships an x64 agent; x86 targets fall back.
+            HANDLE hProbe = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (hProbe) {
+                BOOL wow = FALSE;
+                if (IsWow64Process(hProbe, &wow))
+                    targetIs64 = !wow;
+                CloseHandle(hProbe);
+            }
+        }
+
+        if (!targetIs64) {
+            log.info("Target is not x64 — skipping attach route, using classic injection.");
+        } else if (javaCandidates.empty()) {
+            log.info("No attach-capable java found — skipping attach route, using classic injection.");
+        } else {
+            // Candidates are ordered attach-capable-first (full JDKs); the
+            // target's own JRE comes last because JRE images lack the attach
+            // module. Trying them in order keeps Lunar/vanilla injects on the
+            // no-remote-write attach path, which is what keeps Defender's
+            // behavioural model quiet.
+            for (size_t i = 0; i < javaCandidates.size(); ++i) {
+                const std::wstring& javaExe = javaCandidates[i];
+                log.info("Attach route: trying \"" + wideToUtf8(javaExe) + "\"");
+
+                // First candidate gets the JVM-still-booting retry; later ones
+                // get a single shot each.
+                const int attempts = (i == 0) ? kAttachJarAttempts : 1;
+                if (injectViaAttachRoute(pid, dllPath, javaExe, attempts, r, attachError)) {
+                    // Verify the core actually landed in the target's module list.
+                    report(2, "Verifying module");
+                    if (isModuleLoadedInProcess(pid, dllPath)) {
+                        pass(r, InjectStep::VerifyModule, "module visible in target (attach path)");
+                        r.ok = true;
+                        r.injectMethod = "jvmti-attach";
+                        report(kTotalSteps, "Done");
+                        r.message = "Injection complete via jvmti-attach — payload verified in target process.";
+                        log.ok(r.message);
+                        return r;
+                    }
+                    log.warn("Attach reported success but the core DLL is not in the target module list yet.");
+                    attachError = "attach reported OK but module not verifiable";
+                }
+                if (!attachError.empty())
+                    log.warn("Attach via \"" + wideToUtf8(javaExe) + "\" failed (" + attachError + ")");
+            }
+            // Fall through to CRT with the last attach error recorded.
+            log.warn("Attach route failed on all candidates (" + attachError + ") — falling back to classic injection.");
+            r.attachAttemptError = attachError;
+            r.failedStep = InjectStep::AttachJvm;
+        }
+    }
+
+    // ── Step 2: OpenProcess (CRT) ────────────────────────────────────
     report(2, "Opening process");
     const DWORD access =
         PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
@@ -276,8 +482,14 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectP
 
     HANDLE hProc = OpenProcess(access, FALSE, pid);
     if (!hProc) {
-        fail(r, InjectStep::OpenProcess,
-             "OpenProcess failed — try running as Administrator.", GetLastError());
+        if (!attachError.empty()) {
+            fail(r, InjectStep::OpenProcess,
+                 "Attach route failed (" + attachError + ") and OpenProcess also failed — try running as Administrator.",
+                 GetLastError());
+        } else {
+            fail(r, InjectStep::OpenProcess,
+                 "OpenProcess failed — try running as Administrator.", GetLastError());
+        }
         log.warn("Required access: CREATE_THREAD | VM_OPERATION | VM_WRITE | VM_READ");
         return r;
     }
@@ -400,7 +612,7 @@ InjectionResult Injector::inject(DWORD pid, const std::wstring& dllPath, InjectP
 
     CloseHandle(hProc);
     r.ok = true;
-    report(9, "Done");
+    report(kTotalSteps, "Done");
     r.message = std::string("Injection complete via ") +
                 (r.injectMethod ? r.injectMethod : "unknown") +
                 " — payload verified in target process.";
