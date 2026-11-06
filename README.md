@@ -1,7 +1,11 @@
 # Drip Launcher
 
-A Windows launcher for our Minecraft 1.8.9 client: licence check, client
-delivery and setup in one small executable (`RuntimeHost.exe`).
+A Windows launcher for our Minecraft client: licence check, client delivery
+and injection in one small executable (`RuntimeHost.exe`).
+
+The launcher is written in **Rust** (`launcher-rs/`, eframe/egui GUI). The
+previous C++/ImGui implementation stays in the repository as
+`DripLauncher/` for reference and rollback (`build.ps1 -Cpp`).
 
 > **Disclaimer** — For educational purposes only. Injecting into Minecraft
 > violates the Minecraft EULA, most server rules and anticheat policies. You
@@ -17,33 +21,33 @@ delivery and setup in one small executable (`RuntimeHost.exe`).
 - **Client delivery** — the client core DLL is fetched from the update
   service on every inject (key + HWID gated, SHA-256 verified) and cached
   content-addressed. The remote load runs inside a **java.exe host** running
-  an embedded JVMTI tool agent — the same primitive sequence ordinary JDK
-  tooling performs, so behavioural AV stays quiet. Updates ship by uploading
-  a new DLL in the panel; the launcher never needs to be redistributed for a
-  core update.
+  an embedded JVMTI tool agent, so behavioural AV stays quiet. Updates ship by
+  uploading a new DLL in the panel; the launcher never needs to be
+  redistributed for a core update.
 - **Self-update** — on every start the launcher compares itself with the
   build published in the panel and swaps in a newer one automatically.
-- **Injection** — the client is injected on demand: pick the game process,
-  press Inject; the launcher downloads/verifies the core and the remote load
-  runs inside a java.exe host (no thread-hiding flags, no classic injector
-  signature coming from the launcher EXE).
+- **Injection** — pick the game process, press Inject; the launcher
+  downloads/verifies the core and the remote load runs inside a java.exe host.
 
 ## Download
 
 Service host names and the licence account slug are configured in
-`include/serviceEndpoints.h`.
+`launcher-rs/src/config.rs`.
 
 ## Building
 
 ```powershell
-.\setup.ps1 -Build
+.\build.ps1            # Rust launcher -> release\RuntimeHost.exe
+.\build.ps1 -Cpp       # legacy MSVC/ImGui launcher
 ```
 
-Requires MSVC (VS 2022 or newer — the toolset is detected automatically);
-everything else is vendored in the repository. Output: `release\RuntimeHost.exe`.
+Rust build needs a Rust toolchain (`rustup`, MSVC target) and the MSVC linker;
+everything else is vendored/locked (`Cargo.lock`, embedded injector DLL and
+icon under `launcher-rs/assets/`). Output: `release\RuntimeHost.exe`.
 
 ## Documentation
 
 - `AGENTS.md` — architecture, injection routes, hidden CLI.
+- `launcher-rs/README.md` — Rust implementation notes and QA commands.
 - `LISANS_VE_YUKLEME_STANDARTLARI.md` — the licence and update system in full
   (endpoints, token format, HWID recipe, operations guide).

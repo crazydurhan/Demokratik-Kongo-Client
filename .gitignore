@@ -33,3 +33,6 @@ __pycache__/
 # Entire build tree (never commit intermediates)
 **/build/
 
+# Rust launcher build output
+/launcher-rs/target/
+
