@@ -31,17 +31,8 @@
 # Vendored third-party code. Excluded from GitHub's language stats and from
 # diffs so the reported language breakdown reflects first-party source only.
 */ext/**            linguist-vendored
-DemokratikKongoCore/ext/**  linguist-vendored
-injector/ext/**             linguist-vendored
-# Embedded font byte arrays shared by both binaries.
-include/fonts/**            linguist-vendored
-
-# Generated, frozen mapping table (see AGENTS.md) — do not hand-edit, and keep
-# it out of diffs and language stats.
-DemokratikKongoCore/src/base/sdk/gen/vapeMappingData.cpp linguist-generated
-DemokratikKongoCore/src/base/sdk/gen/vapeMappingData.h   linguist-generated
-
-# Embedded payload blob and vendored miniz are not hand-written source.
-DemokratikKongoCore/src/base/patcher/data.h  linguist-generated
-DemokratikKongoCore/src/base/patcher/miniz.c linguist-vendored
-DemokratikKongoCore/src/base/patcher/miniz.h linguist-vendored
+# Embedded font byte arrays.
+include/fonts/**    linguist-vendored
+# TweetNaCl (public domain) — Ed25519 verification for licence tokens.
+include/licenseShared/tweetnacl.c linguist-vendored
+include/licenseShared/tweetnacl.h linguist-vendored

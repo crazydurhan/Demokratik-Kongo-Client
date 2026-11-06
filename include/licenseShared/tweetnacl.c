@@ -1,4 +1,4 @@
-/* Demokratik Kongo vendor note: unmodified TweetNaCl (20140427) with an MSVC
+/* Drip Launcher vendor note: unmodified TweetNaCl (20140427) with an MSVC
    warning lockout for SDL builds. The arithmetic below relies on intentional
    unsigned wrap-around and narrowing promotions; SDLCheck promotes C4146 to a
    hard error, so it is disabled for this translation unit. No functional

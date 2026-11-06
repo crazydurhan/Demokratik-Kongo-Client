@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{C8F3B2D5-A04E-4F97-B3C2-9D5E6F708912}</ProjectGuid>
+    <RootNamespace>DripLauncher</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)build\</OutDir>
+    <IntDir>$(ProjectDir)build\etc\Debug\</IntDir>
+    <TargetName>RuntimeHost</TargetName>
+    <ApplicationManifest>resources\app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)build\</OutDir>
+    <IntDir>$(ProjectDir)build\etc\Release\</IntDir>
+    <TargetName>RuntimeHost</TargetName>
+    <ApplicationManifest>resources\app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(ProjectDir)ext\json;$(SolutionDir)include\licenseShared;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
+      <!-- Strip the absolute build path from the embedded CodeView record:
+           only the PDB file name may reach the distributed EXE. -->
+      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+    <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)build" mkdir "$(SolutionDir)build"
+copy /Y "$(TargetPath)" "$(SolutionDir)build\RuntimeHost.exe"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)ext\imgui;$(ProjectDir)ext\imgui\backends;$(ProjectDir)resources;$(ProjectDir)src;$(ProjectDir)ext\json;$(SolutionDir)include\licenseShared;$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <!-- Static CRT: the EXE is distributed standalone and must not depend
+           on the VC++ Redistributable being installed on the user's PC. -->
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
+      <!-- Strip the absolute build path from the embedded CodeView record:
+           only the PDB file name may reach the distributed EXE. -->
+      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+    <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)build" mkdir "$(SolutionDir)build"
+copy /Y "$(TargetPath)" "$(SolutionDir)build\RuntimeHost.exe"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="resources\resource.h" />
+    <ClInclude Include="src\launcher\installPath.h" />
+    <ClInclude Include="src\launcher\launcherApp.h" />
+    <ClInclude Include="src\launcher\licenseClient.h" />
+    <ClInclude Include="$(SolutionDir)include\licenseShared\licenseToken.h" />
+    <ClInclude Include="$(SolutionDir)include\licenseShared\licensePublicKey.h" />
+    <ClInclude Include="src\launcher\hashUtils.h" />
+    <ClInclude Include="src\launcher\coreUpdater.h" />
+    <ClInclude Include="src\launcher\javaInject.h" />
+    <ClInclude Include="src\launcher\injectorDllData.h" />
+    <ClInclude Include="src\launcher\launcherGui.h" />
+    <ClInclude Include="src\launcher\logger.h" />
+    <ClInclude Include="src\launcher\modDeploy.h" />
+    <ClInclude Include="src\launcher\process_scanner.h" />
+    <ClInclude Include="src\launcher\util.h" />
+    <ClInclude Include="ext\imgui\imconfig.h" />
+    <ClInclude Include="ext\imgui\imgui.h" />
+    <ClInclude Include="ext\imgui\imgui_internal.h" />
+    <ClInclude Include="ext\imgui\backends\imgui_impl_dx11.h" />
+    <ClInclude Include="ext\imgui\backends\imgui_impl_win32.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\launcher\installPath.cpp" />
+    <ClCompile Include="src\launcher\javaInject.cpp" />
+    <ClCompile Include="src\launcher\launcherApp.cpp" />
+    <ClCompile Include="src\launcher\licenseClient.cpp" />
+    <ClCompile Include="$(SolutionDir)include\licenseShared\licenseToken.cpp" />
+    <ClCompile Include="$(SolutionDir)include\licenseShared\tweetnacl.c" />
+    <ClCompile Include="src\launcher\hashUtils.cpp" />
+    <ClCompile Include="src\launcher\coreUpdater.cpp" />
+    <ClCompile Include="src\launcher\launcherGui.cpp" />
+    <ClCompile Include="src\launcher\logger.cpp" />
+    <ClCompile Include="src\launcher\modDeploy.cpp" />
+    <ClCompile Include="src\launcher\process_scanner.cpp" />
+    <ClCompile Include="src\launcher\util.cpp" />
+    <ClCompile Include="ext\imgui\imgui.cpp" />
+    <ClCompile Include="ext\imgui\imgui_draw.cpp" />
+    <ClCompile Include="ext\imgui\imgui_tables.cpp" />
+    <ClCompile Include="ext\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="ext\imgui\backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="ext\imgui\backends\imgui_impl_win32.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources\payload.rc" />
+    <ResourceCompile Include="resources\version.rc" />
+  </ItemGroup>
+  <!-- The client core project lives in a separate repository; the launcher
+       fetches the built DLL from the update service at inject time. -->
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

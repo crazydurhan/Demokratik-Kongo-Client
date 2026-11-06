@@ -1,10 +1,10 @@
-# Demokratik Kongo — Lisans ve Yükleme Standartları
+# Drip Launcher — Lisans ve Yükleme Standartları
 
 Sürüm: 1.1 · Son güncelleme: 2026-10-17 · Durum: **taslak** (açık kararlar §11)
 
 Bu belge; launcher'ın (`RuntimeHost.exe`) ve çekirdek DLL'in
 (`RuntimeHostCore.dll`) lisans doğrulama, HWID kilidi ve yükleme
-(aktivasyon → enjeksiyon → oyun) akışında uyması gereken kuralları tanımlar.
+(aktivasyon → kurulum → oyun) akışında uyması gereken kuralları tanımlar.
 Kod ile belge çelişirse **belge kazanır** — kod güncellenir.
 
 ---
@@ -13,9 +13,9 @@ Kod ile belge çelişirse **belge kazanır** — kod güncellenir.
 
 | Bileşen | Rol |
 |---|---|
-| **Panel** — `https://kongo.drip.invalid` | Key üretimi, isim/not, HWID sıfırlama, ban, +gün, silme. Giriş: `kongo` |
+| **Panel** — `https://drip.invalid` | Key üretimi, isim/not, HWID sıfırlama, ban, +gün, silme. Giriş: `admin` |
 | **API** — `https://api.drip.invalid` | Keygen CE lisans API'si. TLS zorunlu; paneline admin anahtarı tarayıcıya verilmez (Caddy `/kg/*` proxy'si sunucu tarafında ekler) |
-| **Launcher** — `RuntimeHost.exe` | Lisans ekranı, HWID, DPAPI saklama, doğrulama, enjeksiyon kapısı |
+| **Launcher** — `RuntimeHost.exe` | Lisans ekranı, HWID, DPAPI saklama, doğrulama, kurulum (loader mod + core işaretçisi) |
 | **Çekirdek** — `RuntimeHostCore.dll` | (Faz 2) Oyun içi periyodik yeniden doğrulama |
 
 ## 2. Anahtar modeli
@@ -68,8 +68,8 @@ hwid   = sha256(source)      // 64 karakter küçük harf hex
 1. **Kapı:** `Inject` yalnızca **son 30 dakika içinde** doğrulanmış geçerli lisansta
    etkinleşir; doğrulama daha eskiyse enjeksiyon işçisi önce **yeniden doğrular**
    ("Verifying license..." adımı, ilerleme çubuğunda 0. adım).
-2. **Yükleme adımları görünür olmalı:** Lisans kontrolü → hazırlık → injector'ın
-   adımları (10 adım) → sonuç. İlerleme çubuğu + durum pill'i + toast zorunlu.
+2. **Yükleme adımları görünür olmalı:** Lisans kontrolü → core indirme → java host
+   ile enjeksiyon (3-4 adım) → sonuç. İlerleme çubuğu + durum pill'i + toast zorunlu.
 3. **Saklama:** key **asla düz metin** yazılmaz; DPAPI (`CryptProtectData`,
    kullanıcı hesabına bağlı) ile şifrelenir. Kayıt içeriği:
    `{ key, lastValidAt, expiry }`.
@@ -81,10 +81,13 @@ hwid   = sha256(source)      // 64 karakter küçük harf hex
 6. **UI dili:** İngilizce (mevcut launcher ile tutarlı). Türkçeye çevirmek için
    tek yer: `licenseClient.cpp` içindeki `userMessageForCode` tablosu. *(Açık karar #2.)*
 7. **Günlükleme:** key hiçbir log satırına yazılmaz; yalnızca sonuç kodu loglanır.
-8. **CLI istisnası:** `RuntimeHost.exe --inject <pid>` (geliştirici yolu) lisans
-   kontrolünden **muaf**; yalnızca yerel test için, dağıtımda kullanılmaz.
+8. **CLI istisnası:** `RuntimeHost.exe --inject <pid> [dll]` (geliştirici yolu) lisans
+   kontrolünden **muaf**; yalnızca yerel test/otomasyon için, dağıtımda kullanılmaz.
 9. **Core güncelleme:** her enjeksiyon öncesi sunucudaki **aktif core DLL** indirilir ve
-   SHA-256 ile doğrulanır; indirilemezse gömülü kopya kullanılır (§10).
+   SHA-256 ile doğrulanır; indirilemezse en yeni önbellek kopyası (önceki lisanslı
+   indirmelerden) kullanılır, o da yoksa kullanıcıya net hata gösterilir (§10). Core,
+   launcher ile **dağıtılmaz** (ne gömülü ne yan dosya); uzak yükleme işini java.exe
+   hostundaki ajan yapar (§12).
 10. **Launcher güncelleme:** launcher her açılışta siteye bakar; yeni sürüm varsa indirir,
     doğrular, kendini **yerinde değiştirir** ve yeniden başlar (§10.2). Kullanıcı hiçbir
     şey yapmaz — "siteye yeni EXE at" dışında dağıtım işi kalmaz.
@@ -103,7 +106,7 @@ hwid   = sha256(source)      // 64 karakter küçük harf hex
 5. **Kilitliyken ne olur:** bytecode patch uygulanmaz, modül tick/render/HUD çalışmaz;
    ClickGUI açık kalır ve `License not verified - features disabled` bildirimi gösterilir.
    Doğrulama düzelince otomatik açılır (`License verified - features enabled`).
-6. **Kapsanan senaryo:** DLL kopyalanıp başka bir injector ile sokulsa bile kayıt + HWID
+6. **Kapsanan senaryo:** DLL kopyalanıp elle veya başka bir yükleyiciyle yüklense bile kayıt + HWID
    doğrulaması DLL'in içinde yapıldığı için lisanssız çalışmaz. (Kod düzeyi kırmaya karşı
    "eşik yükseltme"dir — Faz 3 ile kriptografik imza da eklendi: §7.1.)
 
@@ -178,9 +181,24 @@ anında **aktif sürüm** yapar. Launcher her enjeksiyon öncesi aktif sürümü
 EXE hiç değişmez, güncelleme dağıtımı "siteye DLL at" kadar basittir. Panelden eski
 bir sürümü **Aktif Yap** ile geri alabilir (rollback), silebilir veya indirebilirsin.
 
+### 10.1 İki çekirdek hattı (1.8.9 ve yüksek sürümler)
+
+Launcher açılışta **1.8.9** veya **Yüksek Sürümler (1.21.x)** seçimini ister. Seçim iki
+şeyi belirler: süreç listesi (yalnızca o sürümün oyunları görünür) ve indirilecek çekirdek
+hattı. Sunucuda iki bağımsız hat vardır:
+
+| Hat | `edition` | Dizin | Panel bölümü |
+|---|---|---|---|
+| 1.8.9 | `legacy` (varsayılan) | `data/versions/core` | "Çekirdek DLL" |
+| Yüksek sürümler | `modern` | `data/versions/core-modern` | "Çekirdek DLL — 1.21.11" |
+
+Panelden yönetim `kind=core` / `kind=core_modern` ile yapılır (liste, yükle, aktif yap,
+sil). İki hat birbirini etkilemez; birini güncellemek diğerini değiştirmez.
+
 | Uç nokta | Kimlik | İşlev |
 |---|---|---|
-| `GET /up/dl/current?key=<KEY>&fp=<HWID>` | lisans + HWID (herkese açık) | Aktif DLL'i indirir; yanıtta `X-DLL-SHA256` sağlama imzası bulunur |
+| `GET /up/dl/current?key=<KEY>&fp=<HWID>&edition=<legacy\|modern>` | lisans + HWID (herkese açık) | Seçilen hattın aktif DLL'ini indirir; yanıtta `X-DLL-SHA256` sağlama imzası bulunur. `edition` yoksa `legacy`. |
+| `GET /up/dl/core-modern?...` | lisans + HWID | `edition=modern` için kısayol |
 | `GET /up/list` | panel (basic auth) | Sürüm listesi + aktif sürüm |
 | `POST /up/upload?name=&note=` | panel (basic auth) | Yeni sürüm yükler **ve aktif yapar** (ham gövde, `MZ` doğrulaması, ≤ 64 MB) |
 | `POST /up/promote` `{"name"}` | panel | Eski sürümü tekrar aktif yapar (rollback) |
@@ -190,18 +208,20 @@ bir sürümü **Aktif Yap** ile geri alabilir (rollback), silebilir veya indireb
 Launcher tarafı (`coreUpdater.cpp`) kuralları:
 
 1. İndirilen dosya, yanıt başlığındaki `X-DLL-SHA256` ile **doğrulanır**; uyuşmazsa
-   indirme reddedilir ve gömülü kopya kullanılır.
-2. Önbellek **içerik adresli**: `%APPDATA%\RuntimeHost\update\RuntimeHostCore-<sha12>.dll`
+   indirme reddedilir ve en yeni önbellek kopyası kullanılır.
+2. Önbellek **içerik adresli**: `%APPDATA%\RuntimeHost\update\RuntimeHostCore-<edition>-<sha12>.dll`
    — oyunda yüklü eski DLL dosya kilidi yüzünden yeni sürümün yazılmasını engelleyemez.
-3. İndirme başarısızsa (ağ / sunucu / lisans reddi) launcher **gömülü kopyayla** devam
-   eder; bir güncelleme kesintisi lisanslı kullanıcıyı asla kilitleyemez.
+3. İndirme başarısızsa (ağ / sunucu / lisans reddi) en yeni önbellek kopyası (önceki
+   lisanslı indirmelerden) kullanılır; o da yoksa kullanıcıya net bir hata gösterilir.
+   Core hiçbir biçimde launcher ile **dağıtılmaz** — ne gömülü ne yan dosya (§12).
 4. Lisans kapısı **sunucudadır**: indirme anında `validate-key + HWID` yeniden
    doğrulanır; geçersiz anahtar/başka PC `403` alır. Yani DLL, lisanssız kimseye
    servis edilmez — KeyAuth tarzı dağıtım bunun üzerine kuruludur.
 
 ### 10.2 Launcher hattı (EXE de kendini günceller)
 
-Panel → **Core + Launcher** sekmesi → Launcher bölümü. Launcher da aynı depoda
+Panel → **Core + Launcher** sekmesi → "Çekirdek DLL" (1.8.9), "Çekirdek DLL — 1.21.11"
+ve Launcher bölümleri. Launcher da aynı depoda
 versiyonlanır; **farkı**: indirme linki herkese açıktır (yeni kullanıcı, daha
 key'i yokken launcher'ı indirebilmeli).
 
@@ -210,7 +230,7 @@ key'i yokken launcher'ı indirebilmeli).
 | `GET /up/dl/launcher/info` | herkese açık | Aktif launcher'ın `{name, sha256, size}` bilgisi (küçük JSON) |
 | `GET /up/dl/launcher` | herkese açık | Aktif launcher EXE'sini indirir |
 
-Yeni kullanıcı linki: `https://kongo.drip.invalid/up/dl/launcher`
+Yeni kullanıcı linki: `https://drip.invalid/up/dl/launcher`
 (panelde tıkla-kopyala butonu var).
 
 Launcher içi self-update (`coreUpdater.cpp::checkAndApplyLauncherUpdate`):
@@ -242,28 +262,31 @@ Launcher içi self-update (`coreUpdater.cpp::checkAndApplyLauncherUpdate`):
 
 ## 12. Defender / dağıtım notu
 
-Bir JVM injector'u (JVMTI ajanı + MinHook + süreç içi erişim) Defender'ın davranışsal ML
-modelinde her zaman işaretlenme adayıdır; tamamen görünmez yapmak kod imzalama (EV
-sertifikası) ve ciddi anti-analiz işi gerektirir — bu kapsamın dışındadır. Uygulanan
-azaltmalar ve dağıtım kuralı:
+**Kök neden:** Defender'ın davranışsal ML modeli, **launcher EXE'sinin** başka bir
+sürece uzaktan iş parçacığı enjekte etmesini (`Behavior:Win32/DefenseEvasion.A!ml`)
+her seferinde işaretliyordu. Lunar'ın `-XX:+DisableAttachMechanism` bayrağı standart
+JVMTI attach'i kapattığı için her inject bu klasik zincire düşüyordu
+(`VirtualAllocEx + WriteProcessMemory + NtCreateThreadEx`).
 
-1. **Tembel çıkarma (uygulandı):** launcher açılışta DLL'i `%TEMP%`e çıkarmaz; diske
-   yalnızca kullanıcı **Inject'e bastığında** dokunulur (açılıştaki "dropped binary" izi kalktı).
-2. **Kullanıcı istisnası (standart adım):** istemciyi sabit bir klasöre kurun (örn.
-   `C:\DemokratikKongo`); kullanıcı yönetici PowerShell'de
-   `Add-MpPreference -ExclusionPath "C:/DemokratikKongo"` çalıştırsın — veya Güvenlik
-   Merkezi > Virüs ve tehdit koruması > İstisnalar > Klasör ekle. Panelin Launcher
-   bölümünde bu not hazır.
-3. **Yanlış-pozitif bildirimi:** `https://www.microsoft.com/en-us/wdsi/filesubmission`
-   üzerinden dosyayı gönderip inceleme isteyebilirsiniz (gün sürebilir).
-4. Opsiyonel ileri adım: **kod imzalama sertifikası** — davranışsal tespitleri tamamen
-   kaldırmaz; SmartScreen itibarını ve ilk izlenimi düzeltir.
-5. **Attach yolu onarımı (asıl çözüm):** Lunar'ın paketlediği JRE görüntüleri `jdk.attach`
-   modülü içermez; attach denemesi `ClassNotFoundException` ile düşüp her inject **klasik
-   uzak-iş-parçacığı** yoluna (VirtualAllocEx + WriteProcessMemory + NtCreateThreadEx) geçiyordu
-   — Defender'ın işaretlediği davranış tam buydu. Launcher artık attach için **tam JDK'ları**
-   arar (JAVA_HOME → HKCU/HKLM kayıt defteri → PATH → yaygın kurulum dizinleri; hedefin kendi
-   JRE'si **en sonda**) ve adayları sırayla dener. Makinede herhangi bir JDK varsa inject
-   **uzak süreç yazımı olmadan** tamamlanır; Defender'nın davranış modelinin gördüğü zincir
-   ortadan kalkar. Hiç JDK bulunamazsa klasik yol kullanılır (nadir) — o kullanıcılar için
-   istisna hâlâ son çaredir.
+**Çözüm — enjeksiyonu java.exe'ye yaptırmak (uygulandı):** Launcher artık uzak
+yükleme işini kendisi yapmıyor; gömülü bir JVMTI aracı ajanını **java.exe host
+süreci** içinde çalıştırıyor:
+
+    java.exe -agentpath:RuntimeHostInjector.dll=pid=<hedef>;dll=<core.dll> -version
+
+Ajan (`src/agent/injectAgent.cpp`) klasik ilkel API'leri (OpenProcess +
+VirtualAllocEx + WriteProcessMemory + CreateRemoteThread + LoadLibraryW) java.exe
+**içinden** çalıştırır. Bu API dizisi, jcmd/profiler'ların her attach'te yaptığı
+şeyle birebir aynıdır; davranış modeli bunu "normal JDK araç aktivitesi" olarak
+görür — kullanıcının makinesinde birebir doğrulandı: enjeksiyon tamamlandı,
+Defender sıfır uyarı verdi. Ek fayda: `jdk.attach` modülü gerekmediği için **her
+HotSpot java** host olabilir — Lunar'ın kendi Zulu JRE'si dahil.
+
+- **Lisans kapısı değişmedi:** core DLL yine servisten lisans+HWID ile iner; core
+  içindeki bağımsız doğrulama (§7/§7.1) aynen sürer.
+- **Tanılama:** `%APPDATA%\RuntimeHost\inject-agent.log` (ajan) +
+  `%APPDATA%\RuntimeHost\launcher.log` (launcher).
+- **İstisna notu (son çare, başka AV'ler için):** paneldeki klasör istisnası notu
+  duruyor; standart adım değildir.
+- **Yanlış-pozitif bildirimi / kod imzalama (EV):** opsiyonel; davranışsal tespit
+  yerine SmartScreen itibarını düzeltir.

@@ -2,7 +2,7 @@
 
 namespace dk::licensing {
 
-// Raw 32-byte Ed25519 public key of the Demokratik Kongo licence service,
+// Raw 32-byte Ed25519 public key of the Drip Launcher licence service,
 // as lowercase hex. The private half lives ONLY on the VPS (inside the
 // dkk-update container at /data/ed25519.key.pem); clients can verify but
 // never forge tokens - see LISANS_VE_YUKLEME_STANDARTLARI.md.

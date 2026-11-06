@@ -1,8 +1,0 @@
-#include "resource.h"
-
-IDR_PAYLOAD_DLL RCDATA "..\\..\\build\\RuntimeHostCore.dll"
-
-// Application icon. Deliberately abstract and neutral so it matches the
-// "Windows Host Runtime" identity in version.rc -- nothing about the icon
-// should read as the game client it actually is.
-IDI_APPICON ICON "appicon.ico"

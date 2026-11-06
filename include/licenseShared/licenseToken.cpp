@@ -16,7 +16,7 @@ extern "C" {
 
 /*
 ================================================================================
-    Demokratik Kongo - offline licence token verification (shared)
+    Drip Launcher - offline licence token verification (shared)
 --------------------------------------------------------------------------------
     Compiled into BOTH the launcher and the core so a token is verified with
     the exact same code on both sides. The algorithm:

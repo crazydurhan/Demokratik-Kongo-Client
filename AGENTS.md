@@ -1,28 +1,54 @@
 # AGENTS.md
 
-Minecraft 1.8.9 injectable client. Two C++20 / MSVC / x64 components:
+Drip Launcher — a Windows launcher for our Minecraft 1.8.9 client
+(`RuntimeHost.exe`, C++20 / MSVC / x64, ImGui + DX11 GUI).
 
-- `DemokratikKongo/` — launcher EXE (ImGui + DX11 GUI) that injects the core DLL into a JVM process.
-- `DemokratikKongoCore/` — injected DLL (JNI/JVMTI, MinHook, OpenGL overlay, ImGui ClickGUI, module system).
+The launcher itself contains no cheat code. It:
 
-## Injection: attach first, CRT fallback
+- shows a licence screen, verifies the key against the licence service and
+  binds it to this PC's HWID (see `LISANS_VE_YUKLEME_STANDARTLARI.md`),
+- fetches the **client core DLL** from the update service (licence-gated,
+  SHA-256-verified, content-addressed cache) and injects it into the running
+  game by running an embedded JVMTI tool agent inside a **java.exe host
+  process** (see below),
+- keeps itself up to date: every start compares itself against the executable
+  published in the panel and swaps in a newer build.
 
-`Injector::inject` tries two routes in order:
+The client core (module system, ClickGUI, JVMTI patcher, ...) is developed in
+a separate repository; only its built DLL is distributed through the update
+service.
 
-1. **jvmti-attach (preferred):** the launcher extracts a companion agent JAR
-   next to the core DLL and spawns the target's own `java.exe` with
-   `-jar RuntimeHostAgent.jar <pid> "<dllPath>"`. The agent uses the JDK
-   Attach API (`VirtualMachine.attach/loadAgent`) to have the target VM load
-   the JAR, and `agentmain` calls `System.load(coreDll)` inside the target.
-   No remote thread, no LoadLibraryW, no loader-lock contention.
-2. **nt-create-thread-ex (fallback):** the classic
-   `VirtualAllocEx + WriteProcessMemory + NtCreateThreadEx(LoadLibraryW)`
-   pipeline, used when the attach route is unavailable (no discoverable
-   `java.exe`, `-XX:+DisableAttachMechanism`, x86 target, ...).
+## Layout
 
-Both routes converge on the core's single bootstrap (`src/attachEntry.cpp`):
-`DllMain` and `Agent_OnAttach` are exported and funnel into one guarded
-`RunOnce` so the core can never double-initialize.
+- `DripLauncher/` — the launcher EXE (`src/launcher/*`, ImGui GUI,
+  `src/agent/injectAgent.cpp` — the java-hosted injector agent).
+- `include/` — shared headers: stealth names, embedded fonts, and the licence
+  token verifier (`licenseShared/`, TweetNaCl — public domain — plus the
+  service public key) used by the launcher and the core.
+
+## Why injection runs inside java.exe
+
+The launcher EXE performing remote-thread injection gets flagged by Defender's
+behavioural ML (`Behavior:Win32/DefenseEvasion.A!ml`). The exact same
+primitives (OpenProcess + VirtualAllocEx + WriteProcessMemory +
+CreateRemoteThread) executed **from inside a java.exe host** do not — that is
+the pattern ordinary JDK tooling (jcmd, profilers) produces on every attach,
+so it reads as normal developer activity.
+
+Flow: the launcher spawns
+
+```
+java.exe -agentpath:<RuntimeHostInjector.dll>=pid=<targetPid>;dll=<coreDll> -version
+```
+
+The agent (`src/agent/injectAgent.cpp`, built as `RuntimeHostInjector.dll`)
+parses the pid + payload path, injects a small position-independent stub into
+the target, the stub calls `LoadLibraryW(coreDll)` inside the target, the
+agent verifies the module is visible and exits with `0`. Log:
+`%APPDATA%\RuntimeHost\inject-agent.log`. Any HotSpot java works — no
+`jdk.attach` module is involved, so even JRE images (the Zulu JRE Lunar
+bundles) can host the agent. Candidate order: JDKs first
+(`collectAttachJavaExeCandidates` in `process_scanner.cpp`).
 
 ## Build
 
@@ -30,89 +56,49 @@ Both routes converge on the core's single bootstrap (`src/attachEntry.cpp`):
 .\setup.ps1 -Build      # or: .\setup.ps1 then .\build.ps1
 ```
 
-- Requires MSVC (any recent Visual Studio; `MSBuild.exe` is found via vswhere). A JDK is optional: `setup.ps1` writes the JDK's `jvm.lib` path to git-ignored `local.props` if it finds one; otherwise the build links the vendored `DemokratikKongoCore\ext\jni\jvm.lib`.
-- All third-party deps (imgui, minhook, jni, fonts, dxsdk, json) are vendored under `ext/` and committed — no `Örnekler/` folder or network needed.
-- `Release|x64` only — the `.sln` maps only x64 (Core vcxproj also has Win32 configs, but the sln never builds them).
-- On machines without the v143 (VS 2022) toolset, pass the installed toolset to MSBuild, e.g. `/p:PlatformToolset=v145` (VS 18 BuildTools ships v145).
+- Requires MSVC (any recent Visual Studio; `MSBuild.exe` is found via
+  vswhere). `build.ps1` auto-detects the platform toolset (VS 2022 → v143,
+  VS 18 BuildTools → v145). Builds both projects: the launcher EXE and the
+  injector DLL.
+- Everything else is vendored under `DripLauncher/ext/` and committed.
+- `Release|x64` only. Output: `release\RuntimeHost.exe`.
 
-## Companion agent JAR (generated — do not edit by hand)
+## Companion injector (generated — do not edit by hand)
 
-`DemokratikKongo/src/launcher/agentJarData.h` embeds `RuntimeHostAgent.jar`
-as base64. It is generated from `DemokratikKongo/resources/RuntimeHostAgent.java`:
+`DripLauncher/src/launcher/injectorDllData.h` embeds the built
+`RuntimeHostInjector.dll` as base64. Order of operations after editing
+`src/agent/injectAgent.cpp`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File DemokratikKongo\resources\build-agent.ps1
+.\build.ps1
+powershell -ExecutionPolicy Bypass -File DripLauncher\resources\build-injector.ps1
+.\build.ps1
 ```
 
-Re-run after ANY change to `RuntimeHostAgent.java`, then commit the header.
-The script needs a JDK (`javac` + `jar` on PATH or `JAVA_HOME`); it compiles
-with `-source 8 -target 8` so the agent runs on every JVM Minecraft 1.8.9
-might use. The JAR is compiled once and embedded — the runtime never needs
-javac.
+Commit the generated header. The launcher extracts the DLL into its temp
+cache (content-hash keyed) at inject time.
 
-## Binaries are named RuntimeHost, NOT DemokratikKongo
+## Binaries are named RuntimeHost, NOT DripLauncher
 
-`TargetName` in both `.vcxproj` files and `include/stealthNames.h` use stealth names:
+`TargetName` in the `.vcxproj`s and `include/stealthNames.h` use stealth
+names: `RuntimeHost.exe`, `RuntimeHostCore.dll`, `RuntimeHostInjector.dll`,
+and the window class/title and `%APPDATA%` folder are all `RuntimeHost`.
 
-- launcher → `RuntimeHost.exe`, core → `RuntimeHostCore.dll`
-- window title/class, `%APPDATA%` folder, and config dir are all `RuntimeHost` (see `include/stealthNames.h`).
-- Real config path: `%APPDATA%\RuntimeHost\*.json` (config.cpp uses `dk::stealth::kAppFolderUtf8`).
+## Hidden CLI
 
-## Build order matters (embedded payload)
+- `RuntimeHost.exe --inject <pid> [dll]` — run the java-hosted injector
+  without the GUI (smoke tests); the DLL defaults to the newest cached core
+  from past licensed downloads.
+- `RuntimeHost.exe --token-test <file>` — verify an offline licence token
+  against the embedded public key (exit 0 = valid, 2 = invalid).
 
-`DemokratikKongo/resources/payload.rc` embeds the built core DLL as an RCDATA resource:
+## Licensing & update system
 
-```
-IDR_PAYLOAD_DLL RCDATA "..\\..\\build\\RuntimeHostCore.dll"
-```
-
-Core's `OutDir` is `$(SolutionDir)build\`, so the core DLL must build BEFORE the launcher. The `.sln` declares this dependency and `build.ps1` builds the whole solution; if you build projects individually, build Core first.
-
-## Generated mapping data — do not edit by hand
-
-`DemokratikKongoCore/src/base/sdk/gen/vapeMappingData.{h,cpp}` is a committed
-data table of Minecraft 1.8.9 obfuscation mappings. It is required at runtime
-by the SDK's field/method resolver (`mappedRegistry.cpp`, `automap/`). The
-extractor script that produced it was intentionally removed for the public
-release, so treat this table as a frozen, hand-maintained blob.
-
-## Module system
-
-- Modules live in `DemokratikKongoCore/src/base/moduleManager/modules/<category>/`.
-- Register new modules in `moduleManager.cpp` via `registerModule<T>()` (~line 160); names must be unique.
-- Both `.vcxproj` files enumerate sources explicitly (no globbing) — a new `.cpp`/`.h` must also be added to the vcxproj or it will not compile.
-
-## ClickGUI: vendored arifclient GUI
-
-The in-game ClickGUI is a vendored copy of the standalone `arifclient`
-ImGui ClickGUI (arifclient repo: `native/clickgui/`). Sync by porting
-upstream diffs into the vendored tree — do not rewrite it in place:
-
-- `DemokratikKongoCore/src/base/gui/arifgui/` — the GUI library
-  (`include/arif/gui/*.hpp` + `src/*.cpp`; upstream `main.cpp`/demo shell
-  is intentionally not vendored). Every local adaptation is marked with a
-  `DK-PORT:` comment so future upstream diffs stay reviewable.
-- `DemokratikKongoCore/src/base/gui/arifHost.cpp/.h` — the ONLY bridge to
-  the client: two-way model sync (modules/settings/keybinds/favourites/
-  friends/profiles/stats), the per-frame driver, and the GL-context
-  lifecycle. It hangs off `Menu::SetupImgui` (Init), `Gui::Render`
-  (Render) and `Menu::ProcessPendingGLTeardown` (Shutdown).
-- `DemokratikKongoCore/ext/arifgui/*.h` — auto-generated embedded assets
-  (Plus Jakarta Sans, JetBrains Mono, FA6 solid fonts + the PNG icon
-  pack). Regenerate after changing arifclient's `resource/` folder:
-  `powershell -ExecutionPolicy Bypass -File tools\generate-arif-assets.ps1`
-- The legacy ClickGUI body in `gui.cpp` is superseded; that file still
-  owns the shared notification/tooltip/FakeLogin/ItemLogger plumbing.
-- The GUI theme preset persists through the profile JSON (`arifTheme` key).
+Full documentation: `LISANS_VE_YUKLEME_STANDARTLARI.md`. Service host names
+and the Keygen account slug live in **`include/serviceEndpoints.h`** (the only
+place in the launcher); the update service exposes the panel at `/`, public
+token API under `/up/api/*`, licence-gated payload downloads under `/up/dl/*`.
 
 ## No tests / lint / CI
 
-Build success is the only verification. `tools/scan_probe.cpp` is a small
-manual probe for the target `java.exe` discovery (compile command in its
-header comment); it is not part of the build.
-
-## Useful commands
-
-- Headless inject (no GUI): `RuntimeHost.exe --inject <pid>` — exit 0 on success; logs to stdout.
-- In-game ClickGUI opens with the **Insert** key.
-- Agent log markers in the target's stdout: `RH_AGENT ok` / `RH_AGENT err <reason>`.
+Build success is the only verification.
