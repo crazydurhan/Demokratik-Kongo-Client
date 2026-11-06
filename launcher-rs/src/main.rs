@@ -141,6 +141,31 @@ fn run_license_record_tools(args: &[OsString]) -> Option<i32> {
     None
 }
 
+/// `--core-fetch <key> [--edition modern|legacy]`: QA helper that exercises
+/// the licence-gated core download + cache path without the GUI.
+fn run_core_fetch(args: &[OsString]) -> Option<i32> {
+    let key = flag_value(args, "--core-fetch")?.to_string_lossy().to_string();
+    util::attach_console();
+    log::init();
+
+    let edition = edition_from_args(args);
+    let result = update::fetch_latest_core(&key, edition);
+    util::console_out(&format!(
+        "[dk-core] ok={} sha={} name={} size={} path={} error={}",
+        result.ok,
+        result.sha,
+        result.name,
+        result.size,
+        result
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        result.error
+    ));
+    Some(if result.ok { 0 } else { 1 })
+}
+
 /// `--inject <pid> [dll]`: runs the java-hosted injector without the GUI.
 fn run_cli_inject(args: &[OsString]) -> Option<i32> {
     let position = args
@@ -218,6 +243,10 @@ fn main() {
 
     if has_flag(&args, "--license-set") || has_flag(&args, "--license-clear") {
         std::process::exit(run_license_record_tools(&args).unwrap_or(1));
+    }
+
+    if has_flag(&args, "--core-fetch") {
+        std::process::exit(run_core_fetch(&args).unwrap_or(1));
     }
 
     if has_flag(&args, "--inject") {

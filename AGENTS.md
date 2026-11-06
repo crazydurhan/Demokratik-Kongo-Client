@@ -107,6 +107,8 @@ and the window class/title and `%APPDATA%` folder are all `RuntimeHost`.
   DPAPI record round-trip without touching the stored licence.
 - `RuntimeHost.exe --license-set <key>` / `--license-clear` — QA/support
   helpers for the licence record.
+- `RuntimeHost.exe --core-fetch <key> [--edition modern|legacy]` — QA helper
+  that runs the licence-gated core download + cache path and prints the result.
 - `DRIP_NO_UPDATE=1` disables the self-update check (test/QA); builds running
   from a `target\` path skip it automatically.
 
