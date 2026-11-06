@@ -29,3 +29,7 @@ local.props
 __pycache__/
 .aider.chat.history.md
 .aider.input.history
+
+# Entire build tree (never commit intermediates)
+**/build/
+
