@@ -35,8 +35,14 @@ cargo build --release
 | `RuntimeHost.exe --selftest` | HWID + DPAPI round-trip testi (mevcut kayıt korunur) |
 | `RuntimeHost.exe --license-set <key>` | QA/destek: DPAPI kayıt yaz |
 | `RuntimeHost.exe --license-clear` | QA/destek: kayıt sil |
+| `RuntimeHost.exe --core-fetch <key> [--edition modern\|legacy]` | QA: lisans kapılı core indirme + önbellek yolunu çalıştırır |
 
 Çevre değişkenleri: `DRIP_NO_UPDATE=1` self-update kontrolünü kapatır (test için).
+
+Not: resmi build `..\build.ps1` üzerinden yapılır; script `--remap-path-prefix` ile
+mutlak kullanıcı/Cargo yollarını EXE'den temizler ve `/PDBALTPATH` verir. Doğrudan
+`cargo build --release` çalıştırırsan aynı bayrakları `CARGO_ENCODED_RUSTFLAGS` ile
+vermeyi unutma, aksi halde panic yerleri `C:\Users\<ad>\.cargo\...` yollarını taşır.
 
 ## Doğrulananlar
 

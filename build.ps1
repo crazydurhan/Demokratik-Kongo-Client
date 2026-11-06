@@ -66,8 +66,22 @@ try {
     # a terminating error so $LASTEXITCODE stays authoritative.
     $previousErrorAction = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+
+    # Keep machine-specific absolute paths out of the shipped EXE: panic
+    # locations from dependencies would otherwise embed the Cargo registry
+    # path (C:\Users\<name>\.cargo\...) and the workspace path.
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+    $remapFlags = @(
+        "--remap-path-prefix=$cargoHome=C:\cargo",
+        "--remap-path-prefix=$Root=C:\build",
+        "-C",
+        "link-arg=/PDBALTPATH:%_PDB%"
+    )
+    $env:CARGO_ENCODED_RUSTFLAGS = ($remapFlags -join [char]31)
+
     & cargo build --release
     $cargoExit = $LASTEXITCODE
+    Remove-Item Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue
     $ErrorActionPreference = $previousErrorAction
 } finally {
     Pop-Location
