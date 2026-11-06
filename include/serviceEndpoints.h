@@ -16,8 +16,8 @@
 namespace dk::service {
 
 // Scheme-less host names (they are passed straight to WinHttpConnect).
-inline constexpr wchar_t kApiHost[]    = L"api.drip.invalid";   // Keygen CE API
-inline constexpr wchar_t kUpdateHost[] = L"drip.invalid";       // panel / update / token
+inline constexpr wchar_t kApiHost[]    = L"dripclient.duckdns.org";   // Keygen CE API
+inline constexpr wchar_t kUpdateHost[] = L"dripclient.duckdns.org";       // panel / update / token
 
 // Keygen CE account slug that owns the licences.
 inline constexpr wchar_t kAccount[] = L"drip";

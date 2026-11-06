@@ -13,8 +13,8 @@ Kod ile belge çelişirse **belge kazanır** — kod güncellenir.
 
 | Bileşen | Rol |
 |---|---|
-| **Panel** — `https://drip.invalid` | Key üretimi, isim/not, HWID sıfırlama, ban, +gün, silme. Giriş: `admin` |
-| **API** — `https://api.drip.invalid` | Keygen CE lisans API'si. TLS zorunlu; paneline admin anahtarı tarayıcıya verilmez (Caddy `/kg/*` proxy'si sunucu tarafında ekler) |
+| **Panel** — `https://dripclient.duckdns.org` | Key üretimi, isim/not, HWID sıfırlama, ban, +gün, silme. Giriş: `admin` |
+| **API** — `https://dripclient.duckdns.org` | Keygen CE lisans API'si. TLS zorunlu; paneline admin anahtarı tarayıcıya verilmez (Caddy `/kg/*` proxy'si sunucu tarafında ekler) |
 | **Launcher** — `RuntimeHost.exe` | Lisans ekranı, HWID, DPAPI saklama, doğrulama, kurulum (loader mod + core işaretçisi) |
 | **Çekirdek** — `RuntimeHostCore.dll` | (Faz 2) Oyun içi periyodik yeniden doğrulama |
 
@@ -230,7 +230,7 @@ key'i yokken launcher'ı indirebilmeli).
 | `GET /up/dl/launcher/info` | herkese açık | Aktif launcher'ın `{name, sha256, size}` bilgisi (küçük JSON) |
 | `GET /up/dl/launcher` | herkese açık | Aktif launcher EXE'sini indirir |
 
-Yeni kullanıcı linki: `https://drip.invalid/up/dl/launcher`
+Yeni kullanıcı linki: `https://dripclient.duckdns.org/up/dl/launcher`
 (panelde tıkla-kopyala butonu var).
 
 Launcher içi self-update (`coreUpdater.cpp::checkAndApplyLauncherUpdate`):
